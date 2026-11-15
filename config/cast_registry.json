@@ -1,0 +1,44 @@
+{
+  "entries": {
+    "narrator": {
+      "character_id": "narrator",
+      "voice_id": "JBFqnCBsd6RMkjVDRZzb",
+      "characteristics": "Established George narrator from earlier scene; do not change automatically",
+      "status": "locked",
+      "selection": "user_approved",
+      "audition_reference": "outputs/hagrid_scene/narration/intro.mp3"
+    },
+    "hut:Harry": {
+      "character_id": "hut:Harry",
+      "voice_id": "onwK4e9ZLuTAKqWW03F9",
+      "characteristics": "british; light; clear",
+      "status": "locked",
+      "selection": "automatically_selected",
+      "audition_reference": "outputs/hut_revised/auditions/harry.mp3"
+    },
+    "hut:Hagrid": {
+      "character_id": "hut:Hagrid",
+      "voice_id": "JBFqnCBsd6RMkjVDRZzb",
+      "characteristics": "british; deep; rough resonant",
+      "status": "locked",
+      "selection": "automatically_selected",
+      "audition_reference": "outputs/hut_revised/auditions/hagrid.mp3"
+    },
+    "tower:Dumbledore": {
+      "character_id": "tower:Dumbledore",
+      "voice_id": "JBFqnCBsd6RMkjVDRZzb",
+      "characteristics": "british; low; warm resonant",
+      "status": "locked",
+      "selection": "automatically_selected",
+      "audition_reference": "outputs/tower_revised/auditions/dumbledore.mp3"
+    },
+    "tower:Snape": {
+      "character_id": "tower:Snape",
+      "voice_id": "onwK4e9ZLuTAKqWW03F9",
+      "characteristics": "british; low; controlled dark",
+      "status": "locked",
+      "selection": "automatically_selected",
+      "audition_reference": "outputs/tower_revised/auditions/snape.mp3"
+    }
+  }
+}

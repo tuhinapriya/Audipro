@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from fablet.scene_director import VoiceProfile, RequiredBeat, SceneBlueprint, draft, validate_cast, validate_screenplay, review_script, produce, shortlist
 from fablet.providers import EditorialProvider, ElevenLabs
 from fablet.usage import UsageLog
+from fablet.casting import CastRegistry
 
 
 def profile(name, identity, age, accent, register, texture, personality, voice):
@@ -32,6 +33,11 @@ def main():
         profiles=[profile('Narrator','British storyteller','middle_aged','british','mid','clear','grave',alice),profile('Dumbledore','elderly wizard','old','british','low','warm resonant','weak, calm and compassionate',george),profile('Snape','adult British man','middle_aged','british','low','controlled dark','conflicted and restrained',daniel)]
         required=[beat('wind','Cold wind begins','ambience_start'),beat('music','Tension music begins','music_start'),beat('intro','Narrator sets the tower','narration',speaker='Narrator'),beat('confrontation','Dumbledore speaks quietly to Snape','dialogue',speaker='Dumbledore'),beat('spell','Snape speaks the decisive spell','dialogue','Avada Kedavra','Snape'),beat('impact','The spell strikes Dumbledore','action','impact',acoustic='a sharp magical impact'),beat('fall','Dumbledore falls from the tower','action','fall',acoustic='a body falls away followed by distant silence'),beat('reaction','Harry reacts separately from physical events','narration',speaker='Narrator'),beat('music_cut','Music cuts off','music_stop'),beat('wind_cut','Wind stops before silence','ambience_stop'),beat('silence','The scene ends with deliberate silence','silence')]
         premise='A fictionalized tower confrontation. Original dialogue except the user-specified two-word spell.';setting='A wind-swept tower';climax='Snape speaks the spell; impact and fall';resolution='Harry reacts, sound cuts to silence';music=Path('outputs/tower_scene/music/score.mp3');ambience=Path('outputs/tower_scene/sfx/ambience.mp3')
+    registry=CastRegistry.load(Path('config/cast_registry.json'))
+    for selected in profiles:
+        key='narrator' if selected.character=='Narrator' else f'{args.scene}:{selected.character}'
+        selected.voice_id=registry.entries[key].voice_id
+        selected.casting_evidence='Locked casting registry; no automatic substitution.'
     root=Path('outputs')/f'{args.scene}_revised';root.mkdir(parents=True,exist_ok=True)
     bp=SceneBlueprint(title=args.scene.title()+' regression',premise=premise,setting=setting,character_goals=['Convey each character’s immediate goal'],emotional_states=['fear','tension'],escalation='Escalate through the required sequence',audience_emotion='suspense then emotional release',climax=climax,resolution=resolution,profiles=profiles,required_beats=required,optional_details=['Use original language; never impersonate an actor'])
     (root/'blueprint.json').write_text(bp.model_dump_json(indent=2))
@@ -53,13 +59,15 @@ def main():
     if errors: raise ValueError('Screenplay validation failed before audio: '+ '; '.join(errors))
     # Short saved samples are evidence for a human reviewer, not an automatic approval.
     for p in profiles:
-        path=root/'auditions'/f'{p.character.lower()}.mp3'
+        key='narrator' if p.character=='Narrator' else f'{args.scene}:{p.character}'
+        existing=registry.entries[key].audition_reference
+        path=Path(existing) if existing else root/'auditions'/f'{p.character.lower()}.mp3'
         if not path.exists():
             old=provider.voice;provider.voice=p.voice_id
             try:provider.narrate('[quietly] Listen carefully. We have little time.','','',path)
             finally:provider.voice=old
     print(args.scene,'screenplay validated; beginning audio production',flush=True)
-    q=produce(bp,screenplay,root,provider,Path('outputs/rome/cover.webp'),music,ambience)
+    q=produce(bp,screenplay,root,provider,Path('outputs/rome/cover.webp'),music,ambience,registry=registry,scope=args.scene)
     print(args.scene,'rendered',round(q['duration_seconds'],2),'seconds; listening and casting review pending',flush=True)
 
 if __name__=='__main__':main()

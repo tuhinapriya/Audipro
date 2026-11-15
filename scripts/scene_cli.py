@@ -12,7 +12,7 @@ from fablet.usage import UsageLog
 def main():
     load_dotenv();p=argparse.ArgumentParser();sub=p.add_subparsers(dest='command',required=True)
     b=sub.add_parser('blueprint');b.add_argument('--brief',required=True);b.add_argument('--output',type=Path,required=True)
-    r=sub.add_parser('render');r.add_argument('--blueprint',type=Path,required=True);r.add_argument('--output',type=Path,required=True);r.add_argument('--music',type=Path,required=True);r.add_argument('--ambience',type=Path,required=True);r.add_argument('--cover',type=Path,required=True)
+    r=sub.add_parser('render');r.add_argument('--blueprint',type=Path,required=True);r.add_argument('--output',type=Path,required=True);r.add_argument('--music',type=Path,required=True);r.add_argument('--ambience',type=Path,required=True);r.add_argument('--cover',type=Path,required=True);r.add_argument('--cast-registry',type=Path,required=True);r.add_argument('--scope',required=True)
     args=p.parse_args();editor=EditorialProvider(os.environ['OPENAI_MODEL'])
     if args.command=='blueprint':
         blueprint=generate_blueprint(args.brief,editor);args.output.parent.mkdir(parents=True,exist_ok=True);args.output.write_text(blueprint.model_dump_json(indent=2));print('Blueprint saved. Set available voice IDs and review required beats before rendering.');return
@@ -26,7 +26,9 @@ def main():
     else:
         script=draft(blueprint,editor,max_attempts=3);path.write_text(script.model_dump_json(indent=2))
     provider=ElevenLabs(os.environ['ELEVENLABS_API_KEY'],os.environ['ELEVENLABS_VOICE_ID'],'eleven_v4',os.getenv('ELEVENLABS_MUSIC_MODEL','music_v1'),os.getenv('ELEVENLABS_SFX_MODEL','eleven_text_to_sound_v2'))
-    produce(blueprint,script,root,provider,args.cover,args.music,args.ambience)
+    from fablet.casting import CastRegistry
+    registry=CastRegistry.load(args.cast_registry)
+    produce(blueprint,script,root,provider,args.cover,args.music,args.ambience,registry=registry,scope=args.scope)
     print('Rendered; review casting, acting, acoustic actions and mix by ear.')
 
 if __name__=='__main__':main()

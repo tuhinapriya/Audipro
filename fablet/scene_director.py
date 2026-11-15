@@ -179,7 +179,7 @@ def draft(blueprint: SceneBlueprint, editor, max_attempts=2):
     raise ValueError('Screenplay rejected before audio generation: '+feedback)
 
 
-def produce(blueprint: SceneBlueprint, screenplay: SceneScreenplay, root: Path, provider, cover: Path, music_file: Path, ambience_file: Path):
+def produce_legacy(blueprint: SceneBlueprint, screenplay: SceneScreenplay, root: Path, provider, cover: Path, music_file: Path, ambience_file: Path):
     """Render ordered beats. Human review is required for casting and acoustics."""
     import shutil
     from .cinematic import cached
@@ -260,3 +260,17 @@ def produce(blueprint: SceneBlueprint, screenplay: SceneScreenplay, root: Path, 
     q.update({'loudness':loudness(root/'master.mp3'),'deterministic':{'required_beats_in_order':True,'required_speakers_and_text':True,'timeline_beat_ids':actual,'speaker_metadata':speaker_checks},'subjective_review':{'casting':'pending human audition','acting':'pending human listening','acoustics':'pending human listening','music':'pending human listening','dramatic_effect':'pending human listening'},'limitations':['Required beat IDs demonstrate planned coverage, not semantic correctness or acoustic success.','Voice metadata and scripted tags cannot establish accent, depth or acting quality.','Individual dialogue turns are generated independently; conversational continuity needs human review.']})
     atomic_write(root/'creative_qa.json',json.dumps(q,indent=2).encode())
     return q
+
+
+def produce(blueprint: SceneBlueprint, screenplay: SceneScreenplay, root: Path, provider, cover: Path, music_file: Path, ambience_file: Path, *, registry=None, scope: str = ''):
+    """Default to contextual performance blocks; never silently recast."""
+    errors=validate_screenplay(blueprint,screenplay)
+    if errors:raise ValueError('Creative checks failed before paid audio: '+'; '.join(errors))
+    if registry is None or not scope:raise ValueError('A persistent cast registry and scene scope are required')
+    import shutil
+    root.mkdir(parents=True,exist_ok=True)
+    for source,name in ((music_file,'music.mp3'),(ambience_file,'ambience.mp3')):
+        target=root/name
+        if not target.exists():shutil.copy2(source,target)
+    from .performance import produce_performance
+    return produce_performance(blueprint,screenplay,root,provider,cover,registry,scope,generate_missing_actions=True)
