@@ -29,3 +29,20 @@ The local mock is an in-memory, localhost-only test service, not a substitute fo
 ## Quality and limitations
 
 The renderer places stems deterministically, overlaps and fades repeated music, ducks music using the narration sidechain, and normalizes loudness. QA checks valid audio and cover, output duration, peak level and long silence. It does not perform transcription or forced alignment, verify factual entailment, or guarantee artistic quality. Listen through every production and inspect research and the QA report before use. Generated speech is not known to match its text merely because a segment exists. The provider adapters, R2 conditional write behavior, native client compatibility, and real production quality still require live integration tests. Full generated durations are targets, not guaranteed. Existing account and provider settings may affect API access and output.
+
+## First real production setup and audit
+
+The API key is created in the [OpenAI API dashboard](https://platform.openai.com/api-keys); an ElevenLabs API key is created in the [ElevenLabs dashboard](https://elevenlabs.io/app/settings/api-keys). Store them in the local `.env`, never in a commit or chat. The sample configuration uses `gpt-4.1`, `gpt-image-2`, `eleven_multilingual_v2`, `music_v1`, `eleven_text_to_sound_v2`, and `whisper-1`; verify your accounts can access each. Install dependencies and copy the configuration with:
+
+```
+cp .env.example .env
+# Edit .env locally; set OPENAI_API_KEY and ELEVENLABS_API_KEY.
+python -m fablet voices
+# Put a voice_id from that list in ELEVENLABS_VOICE_ID.
+python -m fablet generate --prompt "The Fermi Paradox: Why Haven't We Found Anyone?" --duration 5 --smoke --style cinematic_documentary --output ./outputs/fermi
+python -m fablet transcribe --output ./outputs/fermi
+```
+
+The model defaults are examples, not guarantees of account entitlement. The ElevenLabs voice listing prints the first page of voices; use the dashboard for additional voices. Music API requires an eligible paid subscription, and image generation may require organization verification. Provider calls incur charges; consult each account's current pricing and usage dashboard. The transcription command makes additional paid OpenAI requests and compares each narration stem independently; it flags differences, which may be transcription errors. The pipeline keeps `provider_usage.jsonl` with available OpenAI usage metadata and ElevenLabs requested character/duration counts; it cannot infer authoritative costs or billing for cached calls, failed/time-out requests, or provider-side retries. Check provider billing dashboards for actual charges.
+
+The adapters follow the documented OpenAI Responses web-search and structured-output interfaces and Images API, and ElevenLabs text-to-speech, music and sound-generation REST endpoints. Citations and research response are retained; URLs are checked against the web-search source list, but factual entailment is not automatically guaranteed. Model responses can omit SFX, so review `direction.json` before judging sound design. This has not yet been tested against real provider accounts. A successful render and transcript are evidence only: check the script's sources, listen to the entire result, assess pronunciation, voice consistency and music balance, and regenerate defective stem files by removing their corresponding `.sha256` sidecars before rerunning. Re-run transcription after a changed stem.

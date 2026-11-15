@@ -19,7 +19,7 @@ def tone(path, seconds=2, frequency=440):
     subprocess.run(['ffmpeg', '-y', '-v', 'error', '-f', 'lavfi', '-i', f'sine=frequency={frequency}:duration={seconds}', '-c:a', 'libmp3lame', str(path)], check=True)
 
 class FakeEditor:
-    def research(self, prompt): return json.dumps({'source': 'https://example.org/source'})
+    def research(self, prompt): return json.dumps({'output': [{'type': 'web_search_call', 'action': {'sources': [{'url': 'https://example.org/source'}]}}]})
     def structured(self, prompt, schema):
         if schema == Research: return Research(sources=[Source(id='src', title='Source', url='https://example.org/source', summary='Test')], findings=['Test'])
         if schema == Outline: return Outline(title='Test audiobook', description='A local test', scenes=[Scene(id='scene', purpose='test', source_ids=['src'])])

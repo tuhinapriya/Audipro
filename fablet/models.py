@@ -62,6 +62,7 @@ class SfxCue(BaseModel):
 
 class Direction(BaseModel):
     music: MusicCue
+    music_segment_ids: list[str] = []
     effects: list[SfxCue] = []
     cover_prompt: str
 

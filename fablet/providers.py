@@ -10,19 +10,31 @@ class EditorialProvider:
         self.client = OpenAI()
         self.model = model
 
+    def set_usage_log(self, log):
+        self.usage_log = log
+
+    def _record(self, operation, result, **extra):
+        log = getattr(self, 'usage_log', None)
+        if log:
+            usage = getattr(result, 'usage', None)
+            log.record('openai', operation, model=extra.pop('model', self.model), usage=usage.model_dump() if usage else None, **extra)
+
     def research(self, prompt: str) -> str:
-        result = self.client.responses.create(model=self.model, tools=[{'type': 'web_search'}], input=prompt, include=['web_search_call.action.sources'])
+        result = self.client.responses.create(model=self.model, tools=[{'type': 'web_search'}], tool_choice='required', input=prompt, include=['web_search_call.action.sources'])
+        self._record("web_research", result)
         # Persist the full response, including citations and source metadata.
         return result.model_dump_json()
 
     def structured(self, prompt: str, schema: type):
         result = self.client.responses.parse(model=self.model, input=prompt, text_format=schema)
+        self._record("structured_" + schema.__name__, result)
         if result.output_parsed is None:
             raise RuntimeError('Provider returned no structured output')
         return result.output_parsed
 
     def cover(self, prompt: str, model: str, destination: Path):
         result = self.client.images.generate(model=model, prompt=prompt, size='1024x1024', n=1)
+        self._record("image_generation", result, model=model)
         if not result.data or not result.data[0].b64_json:
             raise RuntimeError('Image provider did not return image bytes')
         from PIL import Image
@@ -33,13 +45,19 @@ class EditorialProvider:
         atomic_write(destination, out.getvalue())
 
 class ElevenLabs:
-    def __init__(self, key: str, voice: str, tts_model: str, music_model: str):
+    def __init__(self, key: str, voice: str, tts_model: str, music_model: str, sfx_model: str = 'eleven_text_to_sound_v2'):
         self.http = httpx.Client(base_url='https://api.elevenlabs.io/v1/', headers={'xi-api-key': key}, timeout=httpx.Timeout(600, connect=30))
-        self.voice, self.tts_model, self.music_model = voice, tts_model, music_model
+        self.voice, self.tts_model, self.music_model, self.sfx_model = voice, tts_model, music_model, sfx_model
+
+    def set_usage_log(self, log):
+        self.usage_log = log
 
     def _audio(self, endpoint: str, body: dict, dest: Path):
         response = self.http.post(endpoint, json=body)
         response.raise_for_status()
+        log = getattr(self, 'usage_log', None)
+        if log:
+            log.record('elevenlabs', endpoint.split('/')[0], model=body.get('model_id'), input_characters=len(body.get('text', '')), requested_seconds=body.get('duration_seconds') or (body.get('music_length_ms', 0) / 1000 or None), response_bytes=len(response.content), request_id=response.headers.get('request-id'))
         if not response.content:
             raise RuntimeError('Provider returned empty audio')
         atomic_write(dest, response.content)
@@ -51,4 +69,20 @@ class ElevenLabs:
         self._audio('music', {'prompt': prompt, 'music_length_ms': seconds * 1000, 'model_id': self.music_model, 'force_instrumental': True}, dest)
 
     def effect(self, prompt: str, seconds: float, dest: Path):
-        self._audio('sound-generation', {'text': prompt, 'duration_seconds': seconds}, dest)
+        self._audio('sound-generation', {'text': prompt, 'duration_seconds': seconds, 'model_id': self.sfx_model}, dest)
+
+
+def check_elevenlabs_access(key: str, voice: str, *, transport=None):
+    """Check authentication and voice availability before incurring generation costs."""
+    with httpx.Client(base_url='https://api.elevenlabs.io/v1/', headers={'xi-api-key': key}, timeout=30, transport=transport) as client:
+        for endpoint, label in [('models', 'authentication'), (f'voices/{voice}', 'selected voice')]:
+            response = client.get(endpoint)
+            if response.is_error:
+                try:
+                    detail = response.json().get('detail', {})
+                    code = detail.get('code') if isinstance(detail, dict) else None
+                except ValueError:
+                    code = None
+                # Do not print provider response bodies or credentials.
+                hint = ' API key ID provided; use the actual ElevenLabs API key.' if code == 'invalid_api_key' else ''
+                raise RuntimeError(f'ElevenLabs {label} check failed (HTTP {response.status_code}).{hint}')
