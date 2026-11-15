@@ -66,12 +66,19 @@ class Direction(BaseModel):
     effects: list[SfxCue] = []
     cover_prompt: str
 
+class GainPoint(BaseModel):
+    time_seconds: float = Field(ge=0)
+    gain_db: float = Field(ge=-60, le=30)
+
 class TimelineItem(BaseModel):
     path: str
     start_seconds: float = Field(ge=0)
     duration_seconds: float = Field(gt=0)
     gain_db: float = 0
     kind: Literal['narration', 'music', 'sfx']
+    gain_envelope: list[GainPoint] = []
+    fade_in_seconds: float | None = Field(default=None, ge=0)
+    fade_out_seconds: float | None = Field(default=None, ge=0)
 
 class Timeline(BaseModel):
     items: list[TimelineItem]
@@ -85,3 +92,54 @@ class Manifest(BaseModel):
     audio_object_key: str
     cover_object_key: str
     mime_type: Literal['audio/mpeg'] = 'audio/mpeg'
+
+class CharacterCasting(BaseModel):
+    name: str = Field(min_length=1)
+    voice_id: str = Field(min_length=1)
+    role: Literal['narrator', 'character']
+    description: str = ''
+
+class DialogueTurn(BaseModel):
+    speaker: str = Field(min_length=1)
+    text: str = Field(min_length=1, max_length=2000)
+    delivery: str = ''
+    emotion: str = ''
+    pause_after_seconds: float = Field(default=0, ge=0, le=10)
+
+class SceneAction(BaseModel):
+    id: str = Field(pattern=r'^[A-Za-z0-9_-]+$')
+    description: str
+    sound_prompt: str
+    anchor: Literal['scene_start', 'narrator_end', 'dialogue_start', 'dialogue_end', 'dialogue_turn_start']
+    offset_seconds: float = 0
+    turn_index: int | None = Field(default=None, ge=0)
+    duration_seconds: float = Field(gt=0, le=30)
+
+class NarrativeDirectionPlan(BaseModel):
+    title: str
+    context: str
+    fictionalized: bool
+    cast: list[CharacterCasting] = Field(min_length=2)
+    narrator_text: str = Field(min_length=1)
+    dialogue: list[DialogueTurn] = Field(min_length=1)
+    actions: list[SceneAction] = []
+    music_prompt: str = Field(min_length=1)
+    ambience_prompt: str = Field(min_length=1)
+    pause_before_dialogue_seconds: float = Field(default=1, ge=0, le=10)
+    ending_silence_seconds: float = Field(default=1, ge=0, le=10)
+
+    @model_validator(mode='after')
+    def valid_cast(self):
+        names = [c.name for c in self.cast]
+        if len(names) != len(set(names)):
+            raise ValueError('Cast names must be unique')
+        if sum(c.role == 'narrator' for c in self.cast) != 1:
+            raise ValueError('Exactly one narrator is required')
+        characters = {c.name for c in self.cast if c.role == 'character'}
+        if any(turn.speaker not in characters for turn in self.dialogue):
+            raise ValueError('Every dialogue turn must refer to a cast character')
+        if len({c.voice_id for c in self.cast if c.role == 'character'}) > 10:
+            raise ValueError('Dialogue supports at most 10 distinct voices')
+        if sum(len(t.text) + len(t.delivery) + 3 for t in self.dialogue) > 2000:
+            raise ValueError('Keep a dialogue request within 2000 characters')
+        return self

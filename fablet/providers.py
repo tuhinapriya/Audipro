@@ -65,6 +65,23 @@ class ElevenLabs:
     def narrate(self, text: str, previous: str, following: str, dest: Path):
         self._audio(f'text-to-speech/{self.voice}', {'text': text, 'model_id': self.tts_model, 'previous_text': previous, 'next_text': following}, dest)
 
+    def dialogue(self, turns: list[dict], dest: Path, metadata_path: Path):
+        """Generate a multi-speaker performance and preserve alignment metadata."""
+        import json
+        if not turns or len({t['voice_id'] for t in turns}) > 10 or sum(len(t['text']) for t in turns) > 2000:
+            raise ValueError('Dialogue requires inputs, at most ten voices and at most 2000 characters')
+        response = self.http.post('text-to-dialogue/with-timestamps', json={'inputs': turns, 'model_id': 'eleven_v4'})
+        response.raise_for_status()
+        data = response.json()
+        audio = base64.b64decode(data.pop('audio_base64'), validate=True)
+        if not audio:
+            raise RuntimeError('Provider returned empty dialogue')
+        atomic_write(dest, audio)
+        atomic_write(metadata_path, json.dumps(data, indent=2).encode())
+        log = getattr(self, 'usage_log', None)
+        if log:
+            log.record('elevenlabs', 'text-to-dialogue', model='eleven_v4', input_characters=sum(len(t['text']) for t in turns), response_bytes=len(audio), request_id=response.headers.get('request-id'))
+
     def music(self, prompt: str, seconds: int, dest: Path):
         self._audio('music', {'prompt': prompt, 'music_length_ms': seconds * 1000, 'model_id': self.music_model, 'force_instrumental': True}, dest)
 
