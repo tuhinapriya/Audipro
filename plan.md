@@ -144,6 +144,8 @@ type ProductionSummary = {
 
 ### 3.3 Worker contract (implemented by teammate, consumed by you)
 
+**Contract amendment (requires teammate implementation):** Claim returns a server-generated unique `attempt_id`; complete includes it in the manifest and accepts only the exact attempt-scoped keys while atomically checking the current, unexpired lease and attempt. This supersedes the original shared-key layout; coordinate this change before integration.
+
 **Base URL:** `https://<deployment-host>/worker` (configurable as `WORKER_BASE_URL`). The production ID is a string, not assumed to be a UUID.
 
 **Auth:** `Authorization: Bearer <WORKER_API_KEY>`. All worker endpoints reject missing/invalid credentials. Secrets are server-side environment variables only.
@@ -165,13 +167,14 @@ Response if a job is available:
     "style": "cinematic_documentary"
   },
   "lease_token": "opaque-secret-lease-token",
+  "attempt_id": "attempt_example456",
   "lease_expires_at": "2026-11-15T22:10:00Z"
 }
 ```
 
 If no job is available: **HTTP 204 No Content**.
 
-**Behavior:** Atomically claim the oldest eligible queued job, set `status=researching`, store `worker_id`, issue a random `lease_token`, and set a **10-minute lease**. Two workers must never claim the same active job. In the demo, run one worker and limit concurrency to 1.
+**Behavior:** Atomically claim the oldest eligible queued job, set `status=researching`, store `worker_id`, issue a random `lease_token` and a unique path-safe `attempt_id` for every claim, and set a **10-minute lease**. Two workers must never claim the same active job. In the demo, run one worker and limit concurrency to 1.
 
 **POST `/worker/progress`**
 
@@ -205,18 +208,19 @@ If no job is available: **HTTP 204 No Content**.
   "job_id": "prod_example123",
   "lease_token": "opaque-secret-lease-token",
   "manifest": {
+    "attempt_id": "attempt_example456",
     "title": "The Great Silence",
     "description": "A cinematic journey through the Fermi Paradox.",
     "duration_seconds": 612,
-    "audio_object_key": "productions/prod_example123/master.mp3",
-    "cover_object_key": "productions/prod_example123/cover.webp",
+    "audio_object_key": "productions/prod_example123/attempt_example456/master.mp3",
+    "cover_object_key": "productions/prod_example123/attempt_example456/cover.webp",
     "mime_type": "audio/mpeg"
   }
 }
 ```
 
 - **Prerequisite:** Both assets have finished uploading; worker checks object existence and nonzero bytes.
-- Backend verifies that the supplied object keys belong under `productions/<job_id>/` and, where possible, performs a storage HEAD check.
+- Backend validates exact object keys under `productions/<job_id>/<attempt_id>/` and, where possible, performs a storage HEAD check. In the same atomic transaction as completion, verify that both the lease token and attempt ID are still current and unexpired. A stale completion returns 409.
 - Atomically store manifest + `status=completed` + `progress_percent=100`.
 - The authorized playback action maps object keys to accessible URLs; the worker does **not** publish expiring signed URLs in the manifest.
 
@@ -252,7 +256,7 @@ Note: **Cover art may be generated in parallel** with the other stages; it is no
 
 Suggested **indicative milestone percentages**: queued 0, researching 10, writing 25, narrating 45, scoring 65, mixing 80, quality_check 92, completed 100. Use monotonically nondecreasing progress. Never make progress look like a guaranteed ETA.
 
-**Stalled jobs:** A server-side scheduled task finds leases that have expired. For MVP: requeue the job if `attempt_count < 2`, otherwise mark failed. A worker that later finishes with an expired lease **cannot** publish. Worker upload keys should be attempt-specific internally or old outputs must not overwrite current completed output. Safe simple approach: use attempt-specific temp prefixes, then publish final keys only while holding a current lease.
+**Stalled jobs:** A server-side scheduled task finds leases that have expired. For MVP: requeue the job if `attempt_count < 2`, otherwise mark failed. A worker that later finishes with an expired lease **cannot** publish. Final assets use unique attempt-specific keys and conditional creation; never promote to shared mutable keys. Atomically accept only the current, unexpired lease and attempt at completion.
 
 **Worker polling:** Every 5 seconds for demo; slower outside demos. When there's no job, keep polling. This is *not* realtime content generation—the worker only begins asynchronous production.
 
@@ -261,8 +265,8 @@ Suggested **indicative milestone percentages**: queued 0, researching 10, writin
 Required object storage layout:
 
 ```text
-productions/<production_id>/master.mp3
-productions/<production_id>/cover.webp
+productions/<production_id>/<attempt_id>/master.mp3
+productions/<production_id>/<attempt_id>/cover.webp
 ```
 
 Optional internal artifacts (kept private, not required by UI):
