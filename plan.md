@@ -1,14 +1,14 @@
-# AI-Native Audiobook Studio — Two-Person Build Plan (v2)
+# Fablet — Native iOS Audiobook Studio: Two-Person Build Plan (v3)
 
 **Date:** November 15, 2026  
 **Status:** Implementation-ready API and ownership contract  
-**Product:** A listener describes an interest, commissions a quality-first narrated and scored audio documentary, and listens once production has finished.
+**Product:** A listener uses an iPhone app to describe an interest, commission a quality-first narrated and scored audio documentary, and listen once production has finished.
 
 ## Decisions — do not leave these open
 
 1. **Asynchronous generation, never live audio generation.** `Create` immediately returns a production ID. Research, scriptwriting, voice, score, SFX, mixing, cover art, and QA run in a background worker.
 2. **One authoritative queue:** **Convex** is the source of truth for jobs, status, library metadata, and user-facing progress. The Python worker **polls and leases** work through authenticated backend HTTP endpoints. Do **not** add Inngest, Redis, BullMQ, or a second queue for the hackathon; that's unnecessary coordination overhead. Reconsider a managed workflow orchestrator later if retries/fan-out become complex.
-3. **Ownership:** **Teammate** builds the entire consumer app, Convex job API/schema, player, library, and the worker-facing HTTP endpoints. **You** build the Python production worker, orchestration, audio processing/QA, cover generation, and upload final artifacts to shared object storage.
+3. **Ownership:** **Teammate** builds the native iOS app in SwiftUI, Convex job API/schema, player, library, and the worker-facing HTTP endpoints. **You** build the Python production worker, orchestration, audio processing/QA, cover generation, and upload final artifacts to shared object storage.
 4. **Storage:** Cloudflare R2 (or S3-compatible storage) for finished MP3/cover. **Worker uploads final assets; app owns how users access them.** The manifest stores object keys, not expiring URLs.
 5. **Production format:** One complete MP3 and one cover WebP/JPEG per job in v1. Optional chapters and transcripts can be added without changing the core flow.
 6. **Demo honesty:** Show a **new real job** submitted and picked up, with genuine progress; separately open a **previously completed** book and play it. No claim that a 10-minute audiobook can be finished in a 30-second demo.
@@ -25,7 +25,7 @@
 | Jobs | Durable queue, lease exclusivity, retries/status transitions, terminal states, truthful progress display | Poll/claim job, generate assets, report real milestones, handle stage errors and retryable failures |
 | Creative pipeline | Display resulting title, description, duration | Research/sources, outline, script revision, narration, score, SFX, mix/master, cover, quality checks |
 | Assets | Define storage bucket keys and serving strategy; issue playback URLs; deal with expired URLs | Upload MP3 + image to agreed keys; verify they exist before publishing |
-| Tests | UI/contract tests, mock worker, Revyl end-to-end app flows | Script/audio tests, provider adapter tests, FFmpeg analysis, full render smoke test |
+| Tests | iOS UI/contract tests, mock worker, Revyl cloud simulator flows, and physical-device playback checks | Script/audio tests, provider adapter tests, FFmpeg analysis, full render smoke test |
 | Demo | Polished app, live submit/progress, previously completed audiobook playback | Run real worker during demo, prep and quality-check 2–3 completed showcase productions |
 
 **Workload:** This is deliberately asymmetric. Your production engine carries more technical/creative uncertainty; teammate's work is still a complete, substantial feature with backend state and workflow correctness.
@@ -39,7 +39,7 @@
 ## 2. System architecture
 
 ```text
-User browser / mobile-friendly Next.js app                 [TEAMMATE]
+Native iOS app (SwiftUI + AVFoundation)                   [TEAMMATE]
     |
     | createProduction(prompt, settings)
     v
@@ -64,7 +64,7 @@ Cloudflare R2 (finished assets; source files optional)    [SHARED]
 User's player                                              [TEAMMATE]
 ```
 
-**Important separation:** The worker must never modify Convex state directly using privileged frontend permissions. It calls dedicated worker endpoints authenticated with `WORKER_API_KEY`. The app must never expose that key to a browser.
+**Important separation:** The worker must never modify Convex state directly using privileged client permissions. It calls dedicated worker endpoints authenticated with `WORKER_API_KEY`. The app must never embed that key in the iOS binary.
 
 ---
 
@@ -105,8 +105,7 @@ type ProductionSummary = {
   title: string | null;
   description: string | null;
   duration_seconds: number | null;   // actual final audio duration
-  cover_url: string | null;          // only populated once ready
-  audio_url: string | null;          // only populated once ready; URL may expire
+  assets_available: boolean;         // true only when completed assets are ready
   error_message: string | null;      // user-safe reason if failed
 };
 ```
@@ -126,12 +125,18 @@ type ProductionSummary = {
 
 - Reactive: the screen automatically updates as Convex status fields change.
 - Enforces ownership for non-public productions.
-- Only returns valid playback/cover URLs when completed; regenerate short-lived download URLs when needed.
+- Returns asset availability, not signed URLs or object keys; URL issuance is a separate action.
 
 **Query** `productions.list({ limit?: number }): ProductionSummary[]`
 
 - Most recent first; includes queued, processing, failed, and completed jobs.
 - Default limit 20; allow navigating to a detail screen.
+
+**Action** `productions.getPlaybackUrl({ id }): { audio_url: string, cover_url: string, expires_at: string }`
+
+- Authenticate the caller and use an authorized backend query to verify ownership (or explicit public access), completed status, and stored asset keys. Reject unauthorized, missing, or incomplete productions.
+- Issue fresh short-lived R2 signed URLs for both assets and return their common ISO-8601 UTC expiry. Keep keys and signing credentials server-side. Public demo assets may use public URLs through the same response contract; `expires_at` still indicates when the client should refresh.
+- The iOS app calls this action when a completed item needs its cover or audio, refreshes before expiry or on access failure, and restores playback position after replacing an expired audio URL. Do not sign URLs inside reactive queries.
 
 **Mutation** `productions.retry({ id }): { id: string, status: "queued" }` (optional for hackathon)
 
@@ -213,7 +218,7 @@ If no job is available: **HTTP 204 No Content**.
 - **Prerequisite:** Both assets have finished uploading; worker checks object existence and nonzero bytes.
 - Backend verifies that the supplied object keys belong under `productions/<job_id>/` and, where possible, performs a storage HEAD check.
 - Atomically store manifest + `status=completed` + `progress_percent=100`.
-- The consumer backend maps object keys to accessible URLs; the worker does **not** publish expiring signed URLs in the manifest.
+- The authorized playback action maps object keys to accessible URLs; the worker does **not** publish expiring signed URLs in the manifest.
 
 **POST `/worker/fail`**
 
@@ -277,10 +282,12 @@ work/<production_id>/<attempt_id>/qa_report.json
 
 ## 4. User experience (teammate)
 
+Build a native SwiftUI iPhone app. Use the Convex Swift client for mutations and reactive queries, with the deployment URL configured per environment. Keep worker and storage credentials on the server. Handle loading, reconnects, errors, and resubscription when the app returns to the foreground. Use a persistent authenticated identity or securely provisioned demo identity consistently so productions remain accessible after relaunch; enforce ownership server-side. Do not rely on an editable client-supplied user ID as authentication. Full production account management can follow the hackathon.
+
 ### Screen A — Create
 - Large prompt input: **"What are you curious about?"**
 - Duration default 10 min; style default cinematic documentary.
-- Create button calls `productions.create` and immediately navigates to `/productions/<id>`.
+- Create button calls `productions.create` and immediately navigates to the production detail view for the returned ID.
 
 ### Screen B — Job detail
 - While queued: **"In the production queue"** (do not imply research has started).
@@ -296,9 +303,10 @@ work/<production_id>/<attempt_id>/qa_report.json
 - Persist pause/seek position locally first; optional account sync later.
 
 ### Player requirements
-- HTML5 audio with play/pause, seek/scrub, current/total time, volume where useful.
-- Handle buffering, network errors, expired signed URLs, and reload resume.
-- Good mobile layout; avoid attempting advanced cross-platform background playback guarantees for the demo.
+- Use AVPlayer with play/pause, seek/scrub, current/total time, and accessible native controls.
+- Configure the iOS audio session for playback and background audio; support lock-screen controls, interruptions, and audio route changes. Test these on a physical iPhone.
+- Handle buffering, network errors, expired signed URLs, and resume position after relaunch; refresh access and restore position if a URL expires.
+- Adapt to iPhone screen sizes, safe areas, Dynamic Type, and VoiceOver. Offline downloads are out of scope for v1.
 
 ---
 
@@ -361,18 +369,22 @@ The above is illustrative: update `researching` immediately when claimed, renew 
 ## 6. Concrete parallel work plan
 
 ### Milestone 0 — Contract + skeleton (do first)
-**Teammate:** Initialize Next.js + Convex; create schema, consumer mutations/queries, empty worker endpoints; use test credentials and a local/demo environment.  
+**Teammate:** Initialize a SwiftUI iOS project + Convex; create schema, consumer mutations/queries and playback URL action, and empty worker endpoints; use test credentials and a local/demo environment. Use a Mac with Xcode for local builds and an iPhone for device testing; an App Store submission is not needed for the demo.
+
 **You:** Build Python worker CLI, typed `claim/progress/heartbeat/complete/fail` client, storage uploader, fixtures.  
-**Integration test:** Create a job -> mock worker claims -> reports two statuses -> uploads known sample MP3/cover -> completes -> frontend plays it.
+**Integration test:** Create a job -> mock worker claims -> reports two statuses -> uploads known sample MP3/cover -> completes -> iOS app plays it.
 
 ### Milestone 1 — Two independent vertical slices
-**Teammate:** Polished Create, detail/status, library, player; reactive updates and mock completed content.  
+**Teammate:** Polished native Create, detail/status, library, and AVPlayer; reactive updates and mock completed content on simulator and iPhone.
+
 **You:** Render a high-quality 60–90-second documentary with researched script, expressive voice, intentional music, restrained SFX, and final master/cover.
 
 ### Milestone 2 — Real end-to-end async production
 Connect the worker to the actual queue. Run a real request in the app, observe real status transitions, and publish a newly generated master/cover. Create a longer 8–12-minute showcase production offline and listen through the whole artifact.
 
 ### Milestone 3 — Demo readiness and failure recovery
+Build an arm64 iOS Simulator `.app` (or zipped `.app`) for Revyl and test Create → Status → Library → Playback on a cloud simulator. Separately test audio, background playback, interruptions, and lock-screen controls on a physical iPhone.
+
 Test empty queue, duplicate button clicks, worker restart, expired lease, failure and retry, partial upload, expired signed URL, and stale producer completing late. Prepare 2–3 excellent completed works in the same app used for new requests.
 
 ---
@@ -383,9 +395,9 @@ Test empty queue, duplicate button clicks, worker restart, expired lease, failur
 
 **On stage (approximately 60–90 seconds; adapt to available slot):**
 
-1. **0–15 seconds:** Enter a novel audience-suggested prompt, choose style, click **Create**. A new job appears in the library as **Queued**.
-2. **15–35 seconds:** The real worker claims it; the page reactively changes to **Researching** (or whichever step it has genuinely reached). Show the server-side worker log/trace briefly if desired. **Do not wait for rendering to finish.**
-3. **35–65 seconds:** Click a **Previously Completed** production. Show title, cover, duration, play the best 15–25-second excerpt with narration + score + subtle SFX.
+1. **0–15 seconds:** Enter a novel audience-suggested prompt, choose style, tap **Create**. A new job appears in the library as **Queued**.
+2. **15–35 seconds:** The real worker claims it; the app reactively changes to **Researching** (or whichever step it has genuinely reached). Show the server-side worker log/trace briefly if desired. **Do not wait for rendering to finish.**
+3. **35–65 seconds:** Tap a **Previously Completed** production. Show title, cover, duration, play the best 15–25-second excerpt with narration + score + subtle SFX.
 4. **65–90 seconds:** Show another finished book with a different style or topic. Explain that the exact same asynchronous pipeline creates new productions and stores them here when completed.
 
 **Stage-friendly one-liner:** *"We just commissioned a new audiobook; it's producing in the background. Here's a completed one made by the same system, with the script, voices, score, and mix all generated and quality-checked."*
@@ -396,15 +408,17 @@ Test empty queue, duplicate button clicks, worker restart, expired lease, failur
 
 ## 8. Engineering acceptance checklist
 
-- [ ] Frontend `create` returns and displays a real job ID without starting media generation inline.
+- [ ] iOS app `create` returns and displays a real job ID without starting media generation inline.
 - [ ] Convex has one authoritative jobs table and atomic exclusive leasing.
-- [ ] Worker endpoints are authenticated; secrets never reach browser bundles.
+- [ ] Worker endpoints are authenticated; worker and storage secrets never enter the iOS app.
 - [ ] A Python worker can claim work, heartbeat, report stage, fail, and complete it.
 - [ ] UI reflects **actual** Convex state via subscriptions (not fictional progress).
-- [ ] Job survives app refresh, worker crash, and a delayed audio-generation step.
+- [ ] Job survives app relaunch, worker crash, and a delayed audio-generation step.
 - [ ] An expired lease cannot publish over a newer attempt.
 - [ ] Final manifest includes title, description, actual duration, MP3 key, cover key.
-- [ ] MP3 plays and seeks on mobile; cover image appears in library and detail page.
+- [ ] Revyl covers Create → Status → Library → Playback using an iOS Simulator build.
+- [ ] Authorized playback action issues fresh URLs; refresh and playback resume work after expiry.
+- [ ] MP3 plays and seeks on an iPhone; background playback, interruptions, and lock-screen controls work; cover appears in library and detail view.
 - [ ] A failed stage produces a truthful failure state or controlled retry.
 - [ ] One **new** job can be demonstrated live; at least two **completed** jobs have excellent audible samples.
 - [ ] Full quality check performed on the rendered showcase, not only the first 20 seconds.
@@ -415,18 +429,20 @@ Test empty queue, duplicate button clicks, worker restart, expired lease, failur
 
 **Build now:** Single-user-friendly demo, async jobs, one MP3 + cover, style/duration choices, reactive status, library, reliable player, high-quality 8–12-minute samples.
 
-**Do not build now:** Real-time synthesized audiobook streams; automatic generation of new UI widgets; public social network; marketplace; paid subscriptions; ten providers per media category; complex editing timeline in browser; word-by-word subtitles; universal voice cloning; multi-hour output; high-throughput production clusters.
+**Roadmap after the core pipeline:** Add completion push notifications: securely register device tokens, request notification permission at an appropriate time, deliver through APNs after a production completes, and open the matching production on tap. Handle token rotation, delivery failures, and user preferences. Until then, users can return to the app to check status.
 
-**Sponsor tools:** Convex can be part of the runtime backend. Capy is used to implement or improve the app and production code; Revyl is used to validate real user flows. Neither needs an invented per-request runtime role.
+**Do not build now:** Real-time synthesized audiobook streams; automatic generation of new UI widgets; public social network; marketplace; paid subscriptions; ten providers per media category; complex in-app editing timeline; word-by-word subtitles; universal voice cloning; multi-hour output; high-throughput production clusters.
+
+**Sponsor tools:** Convex can be part of the runtime backend. Capy can help implement or improve the app and production code. Use Revyl for native iOS simulator flows alongside XCTest/XCUITest and physical-device checks. These tools do not need an invented per-request runtime role.
 
 ---
 
 ## 10. Initial handoff messages
 
 **Send teammate:**  
-> You own the Next.js consumer app **and** its Convex jobs backend. Implement `productions.create/get/list`, the authenticated worker endpoints (`claim`, `progress`, `heartbeat`, `complete`, `fail`), and the UI that submits prompts, displays real queued/processing/completed status, and plays completed MP3+cover URLs. The API contract in Section 3 is frozen for v1. Develop using a mock worker and sample MP3 until my production engine is ready. For the demo, we submit a real queued job and play a previously finished book.
+> You own the native SwiftUI iOS app **and** its Convex jobs backend. Implement `productions.create/get/list`, the authorized `productions.getPlaybackUrl` action, the authenticated worker endpoints (`claim`, `progress`, `heartbeat`, `complete`, `fail`), and the UI that submits prompts, displays real queued/processing/completed status, and plays completed MP3+cover URLs. The API contract in Section 3 is frozen for v1. Develop using a mock worker and sample MP3 until my production engine is ready. For the demo, we submit a real queued job and play a previously finished book.
 
 **Your own implementation target:**  
 > Build a Python worker with the worker HTTP client, durable heartbeat, research → script → voice/music/SFX → mix/QA → cover stages, R2 upload, and manifest publication. Optimize for editorial/audio quality, not immediate response. First ship a fully scored 60–90-second sample, then the 8–12-minute complete documentary.
 
-**Shared merge rule:** Any breaking change to `CreateProductionInput`, worker endpoint payloads, status names, or manifest keys requires an explicit review by both people. Everything behind those interfaces can evolve independently.
+**Shared merge rule:** Any breaking change to `CreateProductionInput`, consumer and playback action contracts, worker endpoint payloads, status names, or manifest keys requires an explicit review by both people. Everything behind those interfaces can evolve independently.
