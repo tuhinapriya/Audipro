@@ -76,19 +76,7 @@ private struct FabletRootView: View {
 
     private var tabs: some View {
         @Bindable var model = model
-        return TabView(selection: $model.selectedTab) {
-            NavigationStack {
-                HomeView().navigationDestination(for: String.self) { DetailDestination(id: $0) }
-            }.tabItem { Label("Home", systemImage: "house") }.tag(AppTab.home)
-            NavigationStack {
-                CreateView()
-            }.tabItem { Label("Create", systemImage: "sparkles") }.tag(AppTab.create)
-            NavigationStack {
-                LibraryView().navigationDestination(for: String.self) { DetailDestination(id: $0) }
-            }.tabItem { Label("Library", systemImage: "books.vertical") }.tag(AppTab.library)
-        }
-        .tint(FabletColors.accent)
-        .safeAreaInset(edge: .top, spacing: 0) {
+        return VStack(spacing: 0) {
             if model.repositoryMode == "Demo" {
                 Text("Demo · Saved locally only. Jobs stay queued; no audio is generated.")
                     .font(.caption.weight(.medium))
@@ -98,7 +86,20 @@ private struct FabletRootView: View {
                     .padding(10)
                     .background(FabletColors.surfaceRaised)
             }
+            TabView(selection: $model.selectedTab) {
+                NavigationStack {
+                    HomeView().navigationDestination(for: String.self) { DetailDestination(id: $0) }
+                }.tabItem { Label("Home", systemImage: "house") }.tag(AppTab.home)
+                NavigationStack {
+                    CreateView()
+                }.tabItem { Label("Create", systemImage: "sparkles") }.tag(AppTab.create)
+                NavigationStack {
+                    LibraryView().navigationDestination(for: String.self) { DetailDestination(id: $0) }
+                }.tabItem { Label("Library", systemImage: "books.vertical") }.tag(AppTab.library)
+            }
+            .tint(FabletColors.accent)
         }
+        .background(FabletColors.background)
         .sheet(isPresented: Binding(
             get: { model.player.isPresented },
             set: { model.player.isPresented = $0 }
