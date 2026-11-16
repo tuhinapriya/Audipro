@@ -33,11 +33,14 @@ class Pipeline:
             atomic_write(research_raw, response.encode())
             atomic_write(root / 'research_response.sha256', brief_hash.encode())
         raw = research_raw.read_text()
-        research = cached_model(root/'research.json', Research, raw, lambda: self.editor.structured('Extract source references with stable IDs, source URLs, findings and caveats from this web research response. Do not invent sources.\n'+raw, Research))
         response_data = json.loads(raw)
         retrieved_urls = {source.get('url') for item in response_data.get('output', []) if item.get('type') == 'web_search_call' for source in ((item.get('action') or {}).get('sources') or []) if isinstance(source, dict)}
         cited_urls = {annotation.get('url') for item in response_data.get('output', []) if item.get('type') == 'message' for content in item.get('content', []) for annotation in (content.get('annotations') or []) if annotation.get('type') == 'url_citation'}
         source_urls = {canonical_url(url) for url in retrieved_urls | cited_urls if url}
+        if not source_urls:
+            raise ValueError('Research response has no web-search sources or citations')
+        source_prompt = 'Extract source references with stable IDs, findings and caveats from this web research response. Every source URL must be copied exactly from the allowed URL list; omit any source not in that list.\nAllowed URLs:\n' + '\n'.join(sorted(source_urls)) + '\nResponse:\n' + raw
+        research = cached_model(root/'research.json', Research, source_prompt, lambda: self.editor.structured(source_prompt, Research))
         if not source_urls or any(canonical_url(source.url) not in source_urls for source in research.sources):
             raise ValueError('Research sources must be present in web-search results or citations')
         progress('writing', 25, 'Planning and revising the story')

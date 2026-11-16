@@ -46,9 +46,10 @@ describe("consumer and worker contract", () => {
     await expect(s.t.mutation(api.productions.create, { prompt: "a valid long prompt" })).rejects.toThrow("Authentication required");
     await expect(s.alice.mutation(api.productions.create, { prompt: " short " })).rejects.toThrow();
     const first = await s.alice.mutation(api.productions.create, { prompt: "  First valid prompt  " });
-    await s.bob.mutation(api.productions.create, { prompt: "Another valid prompt" });
+    await s.bob.mutation(api.productions.create, { prompt: "Another valid prompt", duration_minutes: 3 });
+    await expect(s.alice.mutation(api.productions.create, { prompt: "A valid prompt", duration_minutes: 0.01 })).rejects.toThrow();
     expect(await s.bob.query(api.productions.get, { id: first.id })).toBeNull();
-    expect(await s.alice.query(api.productions.get, { id: first.id })).toMatchObject({ prompt: "First valid prompt", duration_minutes_requested: 10, style: "cinematic_documentary", assets_available: false });
+    expect(await s.alice.query(api.productions.get, { id: first.id })).toMatchObject({ prompt: "First valid prompt", duration_minutes_requested: 1, style: "cinematic_documentary", assets_available: false });
     expect(await s.alice.query(api.productions.list, {})).toHaveLength(1);
     await expect(s.alice.action(api.productions.getPlaybackUrl, { id: first.id })).rejects.toThrow();
     await expect(s.bob.action(api.productions.getPlaybackUrl, { id: first.id })).rejects.toThrow();

@@ -35,7 +35,7 @@ final class DemoProductionRepository: ProductionRepository {
         return subject.map { $0.first { $0.id == id } }.eraseToAnyPublisher()
     }
 
-    func create(prompt: String, duration: Int, style: AudiobookStyle) async throws -> String {
+    func create(prompt: String, duration: Double, style: AudiobookStyle) async throws -> String {
         guard loadError == nil else { throw DemoStoreError.unavailable }
         let prompt = try validateProductionInput(prompt: prompt, duration: duration)
         let now = ISO8601DateFormatter().string(from: Date())

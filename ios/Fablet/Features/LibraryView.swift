@@ -116,7 +116,7 @@ struct LibraryView: View {
                     .font(.subheadline)
                     .foregroundStyle(FabletColors.muted)
             }
-            Button("Create Your First Audiobook") { model.selectedTab = .create }
+            Button("Create Your First Audiobook") { model.selectedTab = .home }
                 .buttonStyle(FabletPrimaryButtonStyle())
         }
         .frame(maxWidth: .infinity, alignment: .leading)

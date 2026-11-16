@@ -24,13 +24,15 @@ function summary(p: Production) {
 }
 
 export const create = mutation({
-  args: { prompt: v.string(), duration_minutes: v.optional(v.union(v.literal(5), v.literal(10), v.literal(15))), style: v.optional(style) },
+  args: { prompt: v.string(), duration_minutes: v.optional(v.number()), style: v.optional(style) },
   handler: async (ctx, args) => {
     const user = await owner(ctx);
     const prompt = args.prompt.trim();
     if (prompt.length < 10 || prompt.length > 2000) throw new Error("Prompt must contain 10–2000 characters");
+    const duration = args.duration_minutes ?? 1;
+    if (!Number.isFinite(duration) || duration < 1 / 6) throw new Error("Duration must be at least 10 seconds");
     const now = Date.now();
-    const id = await ctx.db.insert("productions", { owner: user, prompt, duration_minutes_requested: args.duration_minutes ?? 10,
+    const id = await ctx.db.insert("productions", { owner: user, prompt, duration_minutes_requested: duration,
       style: args.style ?? "cinematic_documentary", status: "queued", progress_percent: 0, stage_message: "In the production queue",
       created_at: now, updated_at: now, attempt_count: 0 });
     return { id, status: "queued" as const };

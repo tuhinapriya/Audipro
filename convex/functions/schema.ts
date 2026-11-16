@@ -11,7 +11,7 @@ export const manifest = v.object({
 
 export default defineSchema({
   productions: defineTable({
-    owner: v.string(), prompt: v.string(), duration_minutes_requested: v.union(v.literal(5), v.literal(10), v.literal(15)), style,
+    owner: v.string(), prompt: v.string(), duration_minutes_requested: v.number(), style,
     status, progress_percent: v.number(), stage_message: v.string(), created_at: v.number(), updated_at: v.number(),
     attempt_count: v.number(), worker_id: v.optional(v.string()), lease_hash: v.optional(v.string()), lease_expires_at: v.optional(v.number()),
     manifest: v.optional(manifest), completed_lease_hash: v.optional(v.string()),

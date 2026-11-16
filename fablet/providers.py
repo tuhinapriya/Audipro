@@ -88,7 +88,7 @@ class ElevenLabs:
         self._audio('music', {'prompt': prompt, 'music_length_ms': seconds * 1000, 'model_id': self.music_model, 'force_instrumental': True}, dest)
 
     def effect(self, prompt: str, seconds: float, dest: Path):
-        self._audio('sound-generation', {'text': prompt, 'duration_seconds': seconds, 'model_id': self.sfx_model}, dest)
+        self._audio('sound-generation', {'text': prompt[:450], 'duration_seconds': seconds, 'model_id': self.sfx_model}, dest)
 
 
 def check_elevenlabs_access(key: str, voice: str, *, transport=None):

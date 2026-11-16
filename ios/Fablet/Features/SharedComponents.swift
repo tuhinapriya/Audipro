@@ -227,9 +227,8 @@ func fabletStageMessage(_ production: Production) -> String {
 }
 
 func fabletDuration(_ production: Production) -> String {
-    if let seconds = production.durationSeconds, seconds.isFinite, seconds > 0, seconds < Double(Int.max) {
-        let minutes = max(1, Int((seconds / 60).rounded()))
-        return "\(minutes) min"
-    }
-    return "\(production.durationMinutesRequested) min requested"
+    let seconds = production.durationSeconds ?? production.durationMinutesRequested * 60
+    guard seconds.isFinite, seconds > 0, seconds < Double(Int.max) else { return "—" }
+    let total = Int(seconds.rounded())
+    return total < 60 ? "\(total) sec" : "\(total / 60):\(String(format: "%02d", total % 60))"
 }

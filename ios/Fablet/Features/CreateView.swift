@@ -121,7 +121,7 @@ struct CreateView: View {
 
     private var durationSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            FabletSectionHeading(title: "Length", subtitle: "Choose the time you'd like to spend.")
+            FabletSectionHeading(title: "Length", subtitle: model.repositoryMode == "Local generator" ? "Local demo: a short sample of about 75 seconds will be generated." : "Choose the time you'd like to spend.")
             HStack(spacing: 10) {
                 ForEach(durations, id: \.self) { minutes in
                     Button {
@@ -205,7 +205,7 @@ struct CreateView: View {
         submissionError = nil
         defer { isSubmitting = false }
         do {
-            let id = try await model.create(prompt: trimmedPrompt, duration: duration, style: style)
+            let id = try await model.create(prompt: trimmedPrompt, duration: Double(duration), style: style)
             createdID = id
             prompt = ""
         } catch {

@@ -5,7 +5,7 @@ Style = Literal['cinematic_documentary', 'calm_explainer']
 
 class Brief(BaseModel):
     prompt: str = Field(min_length=10, max_length=2000)
-    duration_minutes: float = Field(gt=0, le=15)
+    duration_minutes: float = Field(gt=0, allow_inf_nan=False)
     style: Style = 'cinematic_documentary'
 
 class Source(BaseModel):

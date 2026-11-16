@@ -13,7 +13,7 @@ def main():
     sub = parser.add_subparsers(dest='command', required=True)
     generate = sub.add_parser('generate')
     generate.add_argument('--prompt', required=True)
-    generate.add_argument('--duration', type=float, choices=[2, 2.5, 3, 5, 10, 15], default=5)
+    generate.add_argument('--duration', type=float, default=5)
     generate.add_argument('--smoke', action='store_true', help='Target roughly 60–90 seconds, subject to actual narration pace')
     generate.add_argument('--style', choices=['cinematic_documentary', 'calm_explainer'], default='cinematic_documentary')
     generate.add_argument('--output', required=True, type=Path)

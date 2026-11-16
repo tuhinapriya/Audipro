@@ -13,9 +13,19 @@ final class ProductionTests: XCTestCase {
         for prompt in ["", "  123456789  ", String(repeating: "a", count: 2001)] {
             XCTAssertThrowsError(try validateProductionInput(prompt: prompt, duration: 10))
         }
-        for duration in [0, 9, 20] {
+        for duration: Double in [0, -1] {
             XCTAssertThrowsError(try validateProductionInput(prompt: "1234567890", duration: duration))
         }
+    }
+
+    func testRequestedDurationDefaultsAndReadsPrompt() throws {
+        XCTAssertEqual(try requestedDuration(in: "Tell me about the ocean"), 1)
+        XCTAssertEqual(try requestedDuration(in: "Make a 3-minute story about space"), 3)
+        XCTAssertEqual(try requestedDuration(in: "Tell me about space in five minutes"), 5)
+        XCTAssertEqual(try requestedDuration(in: "Make a 20 minute story"), 20)
+        XCTAssertEqual(try requestedDuration(in: "Make a 1.5 minute story"), 1.5)
+        XCTAssertEqual(try requestedDuration(in: "Make a 30-second story"), 0.5)
+        XCTAssertThrowsError(try requestedDuration(in: "Make a 2 minute or 3 minute story"))
     }
 
     func testPromptValidationUsesBackendUTF16Length() {
@@ -46,7 +56,7 @@ final class ProductionTests: XCTestCase {
         let statuses: [ProductionStatus] = [.queued, .researching, .writing, .narrating, .scoring, .mixing, .qualityCheck, .completed, .failed]
         XCTAssertEqual(statuses.map(\.rawValue), ["queued", "researching", "writing", "narrating", "scoring", "mixing", "quality_check", "completed", "failed"])
         XCTAssertTrue(statuses.allSatisfy { !$0.label.isEmpty && !$0.stageDescription.isEmpty })
-        XCTAssertEqual(Set(AudiobookStyle.allCases.map(\.rawValue)), Set(["cinematic_documentary", "calm_explainer"]))
+        XCTAssertEqual(Set(AudiobookStyle.allCases.map(\.rawValue)), Set(["cinematic_scene", "cinematic_documentary", "calm_explainer"]))
         XCTAssertThrowsError(try JSONDecoder().decode(ProductionStatus.self, from: Data("\"unknown\"".utf8)))
     }
 
@@ -67,6 +77,6 @@ final class ProductionTests: XCTestCase {
             description: nil, durationSeconds: nil, assetsAvailable: false, errorMessage: nil)
         XCTAssertEqual(fabletProductionTitle(production), "Deep oceans")
         XCTAssertEqual(fabletStageMessage(production), "In the production queue")
-        XCTAssertEqual(fabletDuration(production), "10 min requested")
+        XCTAssertEqual(fabletDuration(production), "10:00")
     }
 }

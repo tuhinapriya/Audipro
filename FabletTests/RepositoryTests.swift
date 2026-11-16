@@ -37,7 +37,7 @@ final class RepositoryTests: XCTestCase {
         XCTAssertEqual(object["progress_percent"] as? Double, 0)
         XCTAssertTrue(object["duration_seconds"] is NSNull)
         XCTAssertThrowsError(try validateProductionInput(prompt: "short", duration: 10))
-        XCTAssertThrowsError(try validateProductionInput(prompt: "A long enough prompt", duration: 7))
+        XCTAssertThrowsError(try validateProductionInput(prompt: "A long enough prompt", duration: 0))
     }
 
     func testConvexFloatWireDecoding() throws {

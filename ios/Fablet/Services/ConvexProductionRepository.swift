@@ -30,13 +30,13 @@ struct ConvexProduction: Decodable {
     }
 
     func model() throws -> Production {
-        guard durationMinutesRequested.isFinite, [5.0, 10.0, 15.0].contains(durationMinutesRequested),
+        guard durationMinutesRequested.isFinite, durationMinutesRequested >= 1.0 / 6.0,
               progressPercent.isFinite, durationSeconds.map({ $0.isFinite }) ?? true else {
             throw RepositoryError.invalidResponse
         }
         return Production(id: id, status: status, progressPercent: progressPercent,
             stageMessage: stageMessage, createdAt: createdAt, updatedAt: updatedAt, prompt: prompt,
-            durationMinutesRequested: Int(durationMinutesRequested), style: style, title: title,
+            durationMinutesRequested: durationMinutesRequested, style: style, title: title,
             description: description, durationSeconds: durationSeconds, assetsAvailable: assetsAvailable,
             errorMessage: errorMessage)
     }
@@ -57,8 +57,9 @@ final class ConvexProductionRepository: ProductionRepository {
             .tryMap { try $0?.model() }.eraseToAnyPublisher()
     }
 
-    func create(prompt: String, duration: Int, style: AudiobookStyle) async throws -> String {
+    func create(prompt: String, duration: Double, style: AudiobookStyle) async throws -> String {
         let prompt = try validateProductionInput(prompt: prompt, duration: duration)
+        guard style != .cinematicScene else { throw RepositoryError.sceneUnavailable }
         let result: CreateResult = try await client.mutation("productions:create", with: [
             "prompt": prompt, "duration_minutes": Double(duration), "style": style.rawValue
         ])

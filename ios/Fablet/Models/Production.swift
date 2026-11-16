@@ -1,15 +1,18 @@
 import Foundation
 
 enum AudiobookStyle: String, Codable, CaseIterable, Identifiable {
+    case cinematicScene = "cinematic_scene"
     case cinematicDocumentary = "cinematic_documentary"
     case calmExplainer = "calm_explainer"
 
     var id: String { rawValue }
-    var title: String { self == .cinematicDocumentary ? "Cinematic Documentary" : "Calm Explainer" }
+    var title: String { switch self { case .cinematicScene: return "Cinematic Scene"; case .cinematicDocumentary: return "Documentary"; case .calmExplainer: return "Calm Explainer" } }
     var subtitle: String {
-        self == .cinematicDocumentary
-            ? "Immersive narration, atmospheric music, and dramatic storytelling."
-            : "Thoughtful narration, gentle soundscapes, and clear explanations."
+        switch self {
+        case .cinematicScene: return "Characters, atmosphere, and sound effects."
+        case .cinematicDocumentary: return "Immersive narration and atmospheric music."
+        case .calmExplainer: return "Thoughtful narration and gentle soundscapes."
+        }
     }
 }
 
@@ -50,7 +53,7 @@ struct Production: Codable, Identifiable {
     let createdAt: String
     let updatedAt: String
     let prompt: String
-    let durationMinutesRequested: Int
+    let durationMinutesRequested: Double
     let style: AudiobookStyle
     let title: String?
     let description: String?

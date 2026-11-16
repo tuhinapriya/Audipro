@@ -6,7 +6,7 @@ import Foundation
 import Observation
 import UIKit
 
-enum AppTab: Hashable { case home, create, library }
+enum AppTab: Hashable { case home, library }
 
 @Observable @MainActor
 final class AppModel {
@@ -51,7 +51,16 @@ final class AppModel {
     init(configuration: FabletConfiguration = .load()) {
         switch configuration {
         case .demo:
+            #if targetEnvironment(simulator)
+            if ProcessInfo.processInfo.arguments.contains("--local-generator") {
+                repository = LocalGeneratorRepository()
+                repositoryMode = "Local generator"
+            } else {
+                repository = DemoProductionRepository()
+            }
+            #else
             repository = DemoProductionRepository()
+            #endif
             isAuthenticated = true
             startList()
         case .invalid(let message):
@@ -95,7 +104,7 @@ final class AppModel {
         isSigningIn = false
     }
 
-    func create(prompt: String, duration: Int, style: AudiobookStyle) async throws -> String {
+    func create(prompt: String, duration: Double, style: AudiobookStyle) async throws -> String {
         guard isAuthenticated, let repository else { throw AppError.signInRequired }
         let id = try await repository.create(prompt: prompt, duration: duration, style: style)
         watchProduction(id: id)

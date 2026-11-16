@@ -91,9 +91,6 @@ private struct FabletRootView: View {
                     HomeView().navigationDestination(for: String.self) { DetailDestination(id: $0) }
                 }.tabItem { Label("Home", systemImage: "house") }.tag(AppTab.home)
                 NavigationStack {
-                    CreateView()
-                }.tabItem { Label("Create", systemImage: "sparkles") }.tag(AppTab.create)
-                NavigationStack {
                     LibraryView().navigationDestination(for: String.self) { DetailDestination(id: $0) }
                 }.tabItem { Label("Library", systemImage: "books.vertical") }.tag(AppTab.library)
             }
