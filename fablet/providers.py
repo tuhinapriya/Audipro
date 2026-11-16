@@ -5,6 +5,8 @@ import httpx
 from openai import OpenAI
 from .artifacts import atomic_write
 
+DIALOGUE_MODEL = 'eleven_v4'
+
 class EditorialProvider:
     def __init__(self, model: str):
         self.client = OpenAI()
@@ -70,7 +72,7 @@ class ElevenLabs:
         import json
         if not turns or len({t['voice_id'] for t in turns}) > 10 or sum(len(t['text']) for t in turns) > 2000:
             raise ValueError('Dialogue requires inputs, at most ten voices and at most 2000 characters')
-        response = self.http.post('text-to-dialogue/with-timestamps', json={'inputs': turns, 'model_id': 'eleven_v4'})
+        response = self.http.post('text-to-dialogue/with-timestamps', json={'inputs': turns, 'model_id': DIALOGUE_MODEL})
         response.raise_for_status()
         data = response.json()
         audio = base64.b64decode(data.pop('audio_base64'), validate=True)
@@ -80,7 +82,7 @@ class ElevenLabs:
         atomic_write(metadata_path, json.dumps(data, indent=2).encode())
         log = getattr(self, 'usage_log', None)
         if log:
-            log.record('elevenlabs', 'text-to-dialogue', model='eleven_v4', input_characters=sum(len(t['text']) for t in turns), response_bytes=len(audio), request_id=response.headers.get('request-id'))
+            log.record('elevenlabs', 'text-to-dialogue', model=DIALOGUE_MODEL, input_characters=sum(len(t['text']) for t in turns), response_bytes=len(audio), request_id=response.headers.get('request-id'))
 
     def music(self, prompt: str, seconds: int, dest: Path):
         self._audio('music', {'prompt': prompt, 'music_length_ms': seconds * 1000, 'model_id': self.music_model, 'force_instrumental': True}, dest)

@@ -16,6 +16,7 @@ def test_text_to_dialogue_request_and_alignment(tmp_path):
     p.dialogue([{'text':'[whispers] Hello','voice_id':'one'},{'text':'[urgent] Go','voice_id':'two'}],tmp_path/'dialogue.mp3',tmp_path/'alignment.json')
     assert seen[0].url.path=='/v1/text-to-dialogue/with-timestamps'
     assert json.loads(seen[0].content)['model_id']=='eleven_v4'
+    assert set(json.loads(seen[0].content))=={'inputs','model_id'}
     assert len(json.loads(seen[0].content)['inputs'])==2
     assert (tmp_path/'dialogue.mp3').read_bytes()==b'audio'
     assert json.loads((tmp_path/'alignment.json').read_text())['voice_segments'][0]['dialogue_input_index']==0

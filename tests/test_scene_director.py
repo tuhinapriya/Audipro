@@ -44,3 +44,37 @@ def test_missing_beat_stops_before_provider_access(tmp_path):
         def __getattribute__(self, name): raise AssertionError('Provider must not be called')
     with pytest.raises(ValueError,match='Creative checks failed'):
         produce(bp,SceneScreenplay(events=[a]),tmp_path,NeverCall(),tmp_path/'cover',tmp_path/'music',tmp_path/'ambience')
+
+
+def test_vocal_performance_round_trip_and_legacy_compatibility():
+    from fablet.scene_director import VocalPerformance
+    old=DramaticEvent.model_validate({'id':'old','kind':'dialogue','speaker':'Harry','text':'Hello','delivery':'whispering'})
+    assert old.vocal_performance is None
+    directed=old.model_copy(update={'vocal_performance':VocalPerformance(emotion='fearful',delivery='whispering')})
+    restored=DramaticEvent.model_validate_json(directed.model_dump_json())
+    assert restored.vocal_performance == VocalPerformance(emotion='fearful',delivery='whispering')
+    assert VocalPerformance(emotion='a complicated, guarded hope').emotion == 'a complicated, guarded hope'
+    with pytest.raises(ValueError):
+        VocalPerformance.model_validate({'speed':1.2,'style':0.5})
+
+
+def test_vocal_performance_rejected_on_non_speech_events():
+    from fablet.scene_director import VocalPerformance
+    bp,action,line=sample()
+    action.vocal_performance=VocalPerformance(delivery='whispering')
+    assert any('vocal performance' in error for error in validate_screenplay(bp,SceneScreenplay(events=[action,line])))
+
+
+def test_extended_direction_round_trip_and_emphasis_validation():
+    from fablet.scene_director import SpatialPosition, VocalPerformance
+    bp,action,line=sample()
+    line.vocal_performance=VocalPerformance(vocal_effort='soft',emotion='frightened',delivery_note='barely steady',distance='close',spatial_position=SpatialPosition(horizontal='left',reference='doorway'),acoustic_environment='stone hall',emphasis=['hello'])
+    restored=DramaticEvent.model_validate_json(line.model_dump_json())
+    assert restored.vocal_performance==line.vocal_performance
+    assert not validate_screenplay(bp,SceneScreenplay(events=[action,restored]))
+    restored.vocal_performance.emphasis=['hell']
+    assert any('emphasis phrase not found' in error for error in validate_screenplay(bp,SceneScreenplay(events=[action,restored])))
+    restored.vocal_performance.emphasis=['hello','hello there']
+    assert any('overlapping emphasis' in error for error in validate_screenplay(bp,SceneScreenplay(events=[action,restored])))
+    for kwargs in ({'vocal_effort':'loud'}, {'distance':'far'}, {'spatial_position':{'horizontal':'behind'}}):
+        with pytest.raises(ValueError):VocalPerformance(**kwargs)

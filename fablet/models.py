@@ -84,6 +84,34 @@ class Timeline(BaseModel):
     items: list[TimelineItem]
     duration_seconds: float = Field(gt=0)
 
+class SpatialMix(BaseModel):
+    """Stereo placement and restrained early reflection for an individual item.
+
+    Pan is -1 (left) to 1 (right); distance is a relative linear distance,
+    with 1 as the reference. Reflection is a single, item-bounded echo.
+    """
+    pan: float = Field(default=0, ge=-1, le=1, allow_inf_nan=False)
+    distance: float = Field(default=1, ge=1, le=10, allow_inf_nan=False)
+    reflection: float = Field(default=0, ge=0, le=0.2, allow_inf_nan=False)
+    reflection_delay_ms: int = Field(default=60, ge=20, le=100)
+
+class ExpressiveItemMix(BaseModel):
+    """Additional settings relative to the item's authored gain and envelope."""
+    gain_offset_db: float = Field(default=0, ge=-30, le=12, allow_inf_nan=False)
+    ambience: bool = False
+    spatial: SpatialMix | None = None
+
+class ExpressiveMix(BaseModel):
+    """Opt-in render settings, keyed by zero-based index in Timeline.items.
+
+    Mark SFX beds as ambience explicitly; unmarked SFX remain foreground.
+    Ducking uses whole narration item intervals, not a loudness threshold.
+    """
+    items: dict[int, ExpressiveItemMix] = Field(default_factory=dict)
+    duck_gain_db: float = Field(default=-9, ge=-30, le=0, allow_inf_nan=False)
+    attack_seconds: float = Field(default=0.15, ge=0.01, le=5, allow_inf_nan=False)
+    release_seconds: float = Field(default=0.3, ge=0.01, le=5, allow_inf_nan=False)
+
 class Manifest(BaseModel):
     attempt_id: str = Field(pattern=r'^[A-Za-z0-9_-]{1,128}$')
     title: str

@@ -1,18 +1,54 @@
 """Contextual performances compiled into the blueprint's ordered timeline."""
 import hashlib
 import json
+import math
 import shutil
 from pathlib import Path
 from .artifacts import atomic_write
 from .audio import duration, quality, render
 from .casting import CastRegistry
 from .director import active_level, loudness
-from .models import Timeline, TimelineItem
-from .scene_director import validate_screenplay
+from .models import ExpressiveItemMix, ExpressiveMix, GainPoint, SpatialMix, Timeline, TimelineItem
+from .providers import DIALOGUE_MODEL
+from .scene_director import emphasis_matches, validate_screenplay
 from .speech_qa import compare, transcribe, transcribe_secondary
 from .usage import UsageLog
 
 SPEECH={'dialogue','reaction'}
+EMOTION_TAGS={'fearful','sad','angry','excited','curious','happy'}
+DELIVERY_TAGS={'whispering','shouting','softly','laughing','crying'}
+EMOTION_ALIASES={'restrained':'restrained','frightened':'fearful','pleading':'pleading','furious':'angry'}
+EFFORT_TAGS={'whisper':'whispering','soft':'softly','projected':'projecting','shout':'shouting'}
+
+def performance_text(event, model: str) -> str:
+    """Keep script text intact; only render a small allowlist of v4 tags.
+
+    An explicit (even empty) typed direction wins over legacy delivery. Legacy
+    free text is accepted only when it is exactly one known delivery label.
+    Objectives, reactions, pace, and surrounding scene prose are not voice cues.
+    """
+    if model != 'eleven_v4':
+        return event.text
+    direction=event.vocal_performance
+    if direction is None:
+        legacy=event.delivery.strip().casefold()
+        tags=[legacy] if legacy in DELIVERY_TAGS else []
+    else:
+        emotion=(direction.emotion or '').strip().casefold()
+        emotion_tag=EMOTION_ALIASES.get(emotion,emotion if emotion in EMOTION_TAGS else None)
+        delivery_tag=EFFORT_TAGS.get(direction.vocal_effort) if direction.vocal_effort is not None else direction.delivery
+        tags=[tag for tag in (emotion_tag,delivery_tag) if tag and (tag in DELIVERY_TAGS or tag in EMOTION_TAGS or tag in EMOTION_ALIASES.values() or tag in EFFORT_TAGS.values())]
+    text=event.text
+    if direction is not None:
+        spans=[]
+        for phrase in direction.emphasis:
+            matches=emphasis_matches(text,phrase)
+            if not matches:raise ValueError(f'{event.id}: emphasis phrase not found in speech: {phrase!r}')
+            spans.extend((m.start(),m.end()) for m in matches)
+        spans.sort()
+        if any(a[1]>b[0] for a,b in zip(spans,spans[1:])):raise ValueError(f'{event.id}: overlapping emphasis phrases')
+        for start,end in reversed(spans):text=text[:start]+text[start:end].upper()+text[end:]
+    return (' '.join(f'[{tag}]' for tag in tags)+' ' if tags else '')+text
 
 def group_events(events):
     """Only adjacent conversational turns share context; physical beats split blocks."""
@@ -27,17 +63,65 @@ def group_events(events):
 
 def align_block(events, segments, length):
     result=[];problems=[]
+    if not isinstance(segments,list):return [],['invalid alignment segments']
+    if any(not isinstance(x,dict) or type(x.get('dialogue_input_index')) is not int or not 0<=x['dialogue_input_index']<len(events) for x in segments):
+        return [],['invalid alignment segment index']
     for i,event in enumerate(events):
         matches=[x for x in segments if x.get('dialogue_input_index')==i]
         if not matches:
             problems.append(f'{event.id}: missing alignment');continue
-        begin=min(x['start_time_seconds'] for x in matches);end=max(x['end_time_seconds'] for x in matches)
-        if not (0<=begin<end<=length+.15):
+        if any(not isinstance(x.get(key),(int,float)) or isinstance(x.get(key),bool) or not math.isfinite(x[key]) for x in matches for key in ('start_time_seconds','end_time_seconds')) or any(not 0<=x['start_time_seconds']<x['end_time_seconds']<=length for x in matches):
             problems.append(f'{event.id}: invalid alignment');continue
-        result.append({'event_id':event.id,'speaker':event.speaker,'start_seconds':begin,'end_seconds':end,'voice_ids':list({x.get('voice_id') for x in matches})})
-    if any(a['end_seconds']>b['start_seconds']+.05 for a,b in zip(result,result[1:])):
+        begin=min(x['start_time_seconds'] for x in matches);end=max(x['end_time_seconds'] for x in matches)
+        result.append({'event_id':event.id,'speaker':event.speaker,'start_seconds':begin,'end_seconds':end,'voice_ids':list(dict.fromkeys(x.get('voice_id') for x in matches))})
+    if any(a['end_seconds']>b['start_seconds'] for a,b in zip(result,result[1:])):
         problems.append('speaker alignment overlaps or is out of order')
     return result,problems
+
+
+def _directed_mix(block, length, alignment, issues):
+    """Return block-local gain points and one representable item position.
+
+    Renderer spatial settings apply to the entire contextual item, never to
+    individual turns. Gain ramps are inside validated turn boundaries; effort
+    and distance are modest authored offsets, not measured normalization.
+    """
+    unresolved=[]
+    for event in block:
+        direction=event.vocal_performance
+        if direction and direction.acoustic_environment:
+            unresolved.append(f'{event.id}: acoustic environment reference not rendered: {direction.acoustic_environment}')
+        if direction and direction.delivery_note:
+            unresolved.append(f'{event.id}: delivery note retained for human review')
+        if direction and direction.emotion and direction.emotion.strip().casefold() not in EMOTION_TAGS | EMOTION_ALIASES.keys():
+            unresolved.append(f'{event.id}: natural-language emotion retained for human review')
+    if block[0].kind=='narration':
+        bounds=[(0.0,length)]
+    elif issues or len(alignment)!=len(block):
+        if any(e.vocal_performance and (e.vocal_performance.vocal_effort or e.vocal_performance.distance or e.vocal_performance.spatial_position) for e in block):
+            unresolved.append('Block '+', '.join(e.id for e in block)+': expressive mix skipped because provider alignment is invalid')
+        return [],None,unresolved
+    else:
+        bounds=[(item['start_seconds'],item['end_seconds']) for item in alignment]
+    points=[]
+    effort_gain={'whisper':-3,'soft':-2,'normal':0,'projected':2,'shout':3}
+    distance_gain={'intimate':0,'close':-1,'conversational':-2,'distant':-6}
+    for event,(start,end) in zip(block,bounds):
+        direction=event.vocal_performance
+        gain=(effort_gain.get(direction.vocal_effort,0)+distance_gain.get(direction.distance,0)) if direction else 0
+        ramp=min(.025,(end-start)/3)
+        for time,value in ((start,0),(start+ramp,gain),(end-ramp,gain),(end,0)):
+            if points and time==points[-1].time_seconds:
+                continue
+            points.append(GainPoint(time_seconds=time,gain_db=value))
+    if not any(point.gain_db for point in points):points=[]
+    positions=[e.vocal_performance.spatial_position.horizontal if e.vocal_performance and e.vocal_performance.spatial_position else ('center' if e.kind=='narration' else None) for e in block]
+    spatial=None
+    if len(set(positions))==1 and positions[0] is not None:
+        spatial=SpatialMix(pan={'left':-.6,'center':0,'right':.6}[positions[0]])
+    elif any(p is not None for p in positions):
+        unresolved.append('Block '+', '.join(e.id for e in block)+': per-turn or partially specified positions cannot be rendered on one contextual item')
+    return points,spatial,unresolved
 
 
 def _perform(block, root, provider, registry, scope, log, max_attempts=3):
@@ -46,13 +130,17 @@ def _perform(block, root, provider, registry, scope, log, max_attempts=3):
     try:voices=[registry.entries[key].voice_id for key in keys]
     except KeyError as e:raise ValueError(f'Missing cast registry entry: {e.args[0]}') from e
     expected=' '.join(e.text for e in block)
-    inputs=[{'text':(f'[{e.delivery}] ' if e.delivery else '')+e.text,'voice_id':voice} for e,voice in zip(block,voices)]
-    digest=hashlib.sha256(json.dumps({'inputs':inputs,'narration':is_narration,'model':provider.tts_model},sort_keys=True).encode()).hexdigest()[:16]
+    model=provider.tts_model if is_narration else DIALOGUE_MODEL
+    inputs=[{'text':performance_text(e,model),'voice_id':voice} for e,voice in zip(block,voices)]
+    digest=hashlib.sha256(json.dumps({'inputs':inputs,'narration':is_narration,'model':model},sort_keys=True).encode()).hexdigest()[:16]
     block_id='__'.join(e.id for e in block)
     folder=root/'performances';folder.mkdir(parents=True,exist_ok=True)
     for attempt in range(1,max_attempts+1):
         stem=folder/f'{block_id}_{digest}_attempt{attempt}.mp3';meta=stem.with_suffix('.json');asr=stem.with_suffix('.asr.json')
-        if not stem.exists() or not stem.stat().st_size or (not is_narration and not meta.exists()):
+        if not stem.exists() or not stem.stat().st_size or not meta.exists():
+            # Invalidate evidence before a possibly failing paid regeneration.
+            for stale in (stem,meta,asr,stem.with_suffix('.secondary.json'),stem.with_suffix('.review.json')):
+                stale.unlink(missing_ok=True)
             if is_narration:
                 previous=provider.voice;provider.voice=voices[0]
                 try:provider.narrate(inputs[0]['text'],'','',stem)
@@ -60,16 +148,21 @@ def _perform(block, root, provider, registry, scope, log, max_attempts=3):
                 atomic_write(meta,json.dumps({'type':'narration','voice_id':voices[0]}).encode())
             else:
                 provider.dialogue(inputs,stem,meta)
-        if not asr.exists():
+        audio_hash=hashlib.sha256(stem.read_bytes()).hexdigest()
+        evidence=json.loads(asr.read_text()) if asr.exists() else {}
+        if evidence.get('audio_sha256') != audio_hash:
             transcript,word_times=transcribe(stem,log)
-            atomic_write(asr,json.dumps({'transcript':transcript,'word_times':word_times},indent=2).encode())
-        evidence=json.loads(asr.read_text());review=compare(expected,evidence['transcript'],evidence['word_times'])
+            evidence={'transcript':transcript,'word_times':word_times,'audio_sha256':audio_hash}
+            atomic_write(asr,json.dumps(evidence,indent=2).encode())
+        review=compare(expected,evidence['transcript'],evidence['word_times'])
         review['attempt']=attempt;review['asset']=str(stem.relative_to(root));review['model']='whisper-1'
         if review['uncertain']:
             secondary=stem.with_suffix('.secondary.json')
-            if not secondary.exists():
-                atomic_write(secondary,json.dumps({'transcript':transcribe_secondary(stem,log)}).encode())
-            second=compare(expected,json.loads(secondary.read_text())['transcript'])
+            secondary_evidence=json.loads(secondary.read_text()) if secondary.exists() else {}
+            if secondary_evidence.get('audio_sha256') != audio_hash:
+                secondary_evidence={'transcript':transcribe_secondary(stem,log),'audio_sha256':audio_hash}
+                atomic_write(secondary,json.dumps(secondary_evidence).encode())
+            second=compare(expected,secondary_evidence['transcript'])
             review['secondary_asr']={'model':'gpt-4o-transcribe',**second}
             review['interpretation']='ASR is uncertain; disagreement requires human review.'
         if review['repeated_phrases']:
@@ -87,7 +180,13 @@ def _perform(block, root, provider, registry, scope, log, max_attempts=3):
     raise RuntimeError(f'Performance {block_id} repeatedly failed speech verification; retained attempts for review')
 
 
-def produce_performance(blueprint, screenplay, root: Path, provider, cover: Path, registry: CastRegistry, scope: str, *, generate_missing_actions: bool = False):
+def produce_performance(blueprint, screenplay, root: Path, provider, cover: Path, registry: CastRegistry, scope: str, *, generate_missing_actions: bool = False, expressive_mix: ExpressiveMix | None = None):
+    """Render contextual blocks; pass ExpressiveMix() to opt into direction mixing.
+
+    Item indices in an explicitly supplied mix refer to the final timeline order.
+    The renderer has one spatial setting per block, not per dialogue turn.
+    Acoustic environment references remain metadata for human review.
+    """
     errors=validate_screenplay(blueprint,screenplay)
     if errors:raise ValueError('Screenplay validation failed: '+'; '.join(errors))
     required_keys={'narrator' if e.kind=='narration' else f'{scope}:{e.speaker}' for e in screenplay.events if e.kind in SPEECH or e.kind=='narration'}
@@ -112,7 +211,8 @@ def produce_performance(blueprint, screenplay, root: Path, provider, cover: Path
         if response.is_error: raise ValueError('A selected voice is unavailable; no substitutions were made. Check the cast registry and account access.')
     work=root/'performance_fixed';work.mkdir(parents=True,exist_ok=True)
     log=UsageLog(work/'provider_usage.jsonl');provider.set_usage_log(log)
-    cursor=0.0;background={};completed=[];tracks=[];timeline_events=[];reviews=[];unresolved=[]
+    cursor=0.0;background={};completed=[];tracks=[];timeline_events=[];reviews=[];unresolved=[];unresolved_direction=[]
+    mix=expressive_mix.model_copy(deep=True) if expressive_mix is not None else None
     def close(kind):
         if kind in background:
             start=background.pop(kind)
@@ -129,7 +229,17 @@ def produce_performance(blueprint, screenplay, root: Path, provider, cover: Path
         elif event.kind in SPEECH or event.kind=='narration':
             stem,review,alignment,issues=_perform(block,work,provider,registry,scope,log)
             length=duration(stem);asset=str(stem.relative_to(root));reviews.append(review);unresolved.extend(issues)
-            tracks.append(TimelineItem(path=asset,start_seconds=cursor,duration_seconds=length,kind='narration'))
+            track=TimelineItem(path=asset,start_seconds=cursor,duration_seconds=length,kind='narration')
+            if mix is not None:
+                points,spatial,direction_issues=_directed_mix(block,length,alignment,issues)
+                unresolved_direction.extend(direction_issues)
+                track.gain_envelope=points
+                if spatial is not None:
+                    settings=mix.items.setdefault(len(tracks),ExpressiveItemMix())
+                    if settings.spatial is not None and settings.spatial != spatial:
+                        unresolved_direction.append('Block '+', '.join(e.id for e in block)+': explicit mix spatial setting overrides performance position')
+                    else:settings.spatial=spatial
+            tracks.append(track)
             for member in block:
                 match=next((x for x in alignment if x['event_id']==member.id),None)
                 # Narration is a single event, so the full block is its anchor.
@@ -155,6 +265,8 @@ def produce_performance(blueprint, screenplay, root: Path, provider, cover: Path
         pos=start;span=duration(path)
         while pos<end:
             length=min(span,end-pos)
+            if mix is not None and kind=='ambience':
+                mix.items.setdefault(len(tracks),ExpressiveItemMix()).ambience=True
             tracks.append(TimelineItem(path=path.name,start_seconds=pos,duration_seconds=length,gain_db=gain,kind='music' if kind=='music' else 'sfx',fade_out_seconds=0 if kind=='music' and pos+length>=end else None))
             if pos+length>=end:break
             pos+=max(.1,length-.1)
@@ -163,9 +275,12 @@ def produce_performance(blueprint, screenplay, root: Path, provider, cover: Path
     actual_ids=[e['beat_id'] for e in timeline_events if e['beat_id'] in expected_ids]
     if actual_ids!=expected_ids:raise ValueError('Required timeline beats missing or out of order')
     atomic_write(work/'timeline.json',timeline.model_dump_json(indent=2).encode())
-    atomic_write(work/'cue_sheet.json',json.dumps({'events':timeline_events,'timeline':timeline.model_dump(),'unresolved':unresolved},indent=2).encode())
+    cue_sheet={'events':timeline_events,'timeline':timeline.model_dump(),'unresolved':unresolved}
+    if mix is not None:cue_sheet.update({'expressive_mix':mix.model_dump(),'unresolved_performance':unresolved_direction})
+    atomic_write(work/'cue_sheet.json',json.dumps(cue_sheet,indent=2).encode())
     target=root/'master_performance_fixed.mp3'
-    render(timeline,root,target,ducking=True)
+    if mix is None:render(timeline,root,target,ducking=True)
+    else:render(timeline,root,target,ducking=True,expressive_mix=mix)
     planned=[(e['start_seconds'],e['end_seconds']) for e in timeline_events if e['kind']=='silence']
     q=quality(target,cover,cursor,allowed_silence=planned)
     text,word_times=transcribe(target,log)
@@ -176,6 +291,9 @@ def produce_performance(blueprint, screenplay, root: Path, provider, cover: Path
         mix_review['secondary_asr']={'model':'gpt-4o-transcribe',**compare(expected,secondary_text)}
         mix_review['interpretation']='ASR is uncertain; disagreement requires human review.'
     q.update({'loudness':loudness(target),'required_beats_in_order':actual_ids,'planned_silence':planned,'speech_performances':reviews,'master_transcription':mix_review,'unresolved_alignment':unresolved,'human_listening_completed':False,'limitations':['ASR can omit repetitions or mishear words.','Casting, acting, acoustics and the finished mix require human listening.','Speaker timestamps are provider estimates.']})
+    if mix is not None:
+        q['unresolved_performance']=unresolved_direction
+        q['limitations'].append('Spatial mix applies to whole performance blocks; per-turn spatial changes and acoustic environment references are not rendered.')
     atomic_write(work/'qa_report.json',json.dumps(q,indent=2).encode())
     if mix_review['repeated_phrases']:
         raise RuntimeError('Final mix contains suspected repeated speech; review retained QA evidence before delivery')

@@ -1,6 +1,7 @@
 """Blueprint-driven cinematic scripting and ordered audio production."""
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Literal
 from pydantic import BaseModel, Field, model_validator
@@ -53,6 +54,37 @@ class SceneBlueprint(BaseModel):
         if len({x.character for x in self.profiles})!=len(self.profiles):raise ValueError('Duplicate character')
         return self
 
+class SpatialPosition(BaseModel):
+    """Horizontal position in the fixed scene/listener stereo frame.
+
+    Reference is a descriptive scene anchor, not a second coordinate frame.
+    """
+    model_config = {'extra': 'forbid'}
+
+    horizontal: Literal['left', 'center', 'right']
+    reference: str = Field(default='', max_length=200)
+
+
+class VocalPerformance(BaseModel):
+    """Optional, explicit per-turn acting direction; not voice or audio settings."""
+    model_config = {'extra': 'forbid'}
+
+    emotion: str | None = Field(default=None, min_length=1, max_length=200)
+    delivery: Literal['whispering','shouting','softly','laughing','crying'] | None = None
+    vocal_effort: Literal['whisper','soft','normal','projected','shout'] | None = None
+    delivery_note: str = Field(default='', max_length=500)
+    distance: Literal['intimate','close','conversational','distant'] | None = None
+    spatial_position: SpatialPosition | None = None
+    acoustic_environment: str = Field(default='', max_length=200)
+    emphasis: list[str] = Field(default_factory=list)
+
+
+def emphasis_matches(text: str, phrase: str):
+    """Match whole authored phrases without modifying the expected transcript."""
+    if not phrase.strip():
+        return []
+    return list(re.finditer(r'(?<!\w)' + re.escape(phrase) + r'(?!\w)', text, re.IGNORECASE))
+
 class DramaticEvent(BaseModel):
     id: str = Field(pattern=r'^[A-Za-z0-9_-]+$')
     beat_id: str = ''
@@ -61,6 +93,7 @@ class DramaticEvent(BaseModel):
     text: str = ''
     emotional_objective: str = ''
     delivery: str = ''
+    vocal_performance: VocalPerformance | None = None
     intensity: str = ''
     pace: str = ''
     intimacy: str = ''
@@ -85,6 +118,15 @@ def validate_screenplay(blueprint: SceneBlueprint, screenplay: SceneScreenplay) 
     for i,e in enumerate(events):
         if e.after_event_id and e.after_event_id not in ids[:i]:errors.append(f'{e.id}: invalid or future anchor')
         if e.kind in ('dialogue','reaction','narration') and (e.speaker not in profiles or not e.text.strip()):errors.append(f'{e.id}: unknown speaker or empty speech')
+        if e.kind not in ('dialogue','reaction','narration') and e.vocal_performance is not None:errors.append(f'{e.id}: vocal performance is only valid for speech')
+        if e.vocal_performance is not None:
+            spans=[]
+            for phrase in e.vocal_performance.emphasis:
+                matches=emphasis_matches(e.text,phrase)
+                if not matches:errors.append(f'{e.id}: emphasis phrase not found in speech: {phrase!r}')
+                spans.extend((match.start(),match.end()) for match in matches)
+            spans.sort()
+            if any(a[1]>b[0] for a,b in zip(spans,spans[1:])):errors.append(f'{e.id}: overlapping emphasis phrases')
         if e.kind=='action' and (not e.physical_action or not e.acoustic_expectation or not e.consequence or not e.sound_prompt):errors.append(f'{e.id}: physical action missing acoustic or consequence detail')
         if e.kind=='silence' and e.duration_seconds <= 0:errors.append(f'{e.id}: silence must have positive duration')
     active=set()
@@ -170,7 +212,7 @@ def review_script(blueprint: SceneBlueprint, screenplay: SceneScreenplay, editor
 def draft(blueprint: SceneBlueprint, editor, max_attempts=2):
     feedback=''
     for _ in range(max_attempts):
-        screenplay=editor.structured('Write a concise original audio screenplay as ordered events based on this blueprint. Use every required beat ID exactly once in order, match required speakers and required text verbatim. Physical actions must have acoustic expectation, physical action, consequence, and a standalone SFX prompt. Music and ambience start/stop are separate events; silence events contain seconds. Speech must be brief and interleaved with actions. Do not imitate actors.\nBlueprint: '+blueprint.model_dump_json()+'\nValidation errors to fix: '+feedback,SceneScreenplay)
+        screenplay=editor.structured('Write a concise original audio screenplay as ordered events based on this blueprint. Use every required beat ID exactly once in order, match required speakers and required text verbatim. Physical actions must have acoustic expectation, physical action, consequence, and a standalone SFX prompt. Music and ambience start/stop are separate events; silence events contain seconds. Speech must be brief and interleaved with actions. For spoken events, set vocal_performance fields only when explicitly described for that speaker in the blueprint or supplied direction; otherwise leave them unset. Do not infer emotion, distance, position, acoustics, emphasis or delivery from dialogue, audience reaction or general scene prose. Spatial horizontal placement must be explicitly authored in the scene/listener stereo frame. Emphasis must quote exact phrases in the spoken text. Never insert acting tags into spoken text. Do not imitate actors.\nBlueprint: '+blueprint.model_dump_json()+'\nValidation errors to fix: '+feedback,SceneScreenplay)
         errors=validate_screenplay(blueprint,screenplay)
         if not errors:
             assessment,errors=review_script(blueprint,screenplay,editor)
@@ -216,10 +258,9 @@ def produce_legacy(blueprint: SceneBlueprint, screenplay: SceneScreenplay, root:
             cursor+=event.duration_seconds
         elif event.kind in ('narration','dialogue','reaction'):
             profile=profiles[event.speaker]; path=root/'speech'/f'{event.id}.mp3';meta=root/'speech'/f'{event.id}.alignment.json'
-            # Narrative objectives belong in the plan, not in speech tags: long
-            # instructions may be spoken aloud by a TTS model. Use delivery only.
-            tag=event.delivery.strip()
-            text=(f'[{tag}] ' if tag else '')+event.text
+            from .performance import performance_text
+            from .providers import DIALOGUE_MODEL
+            text=performance_text(event,DIALOGUE_MODEL)
             request=[{'text':text,'voice_id':profile.voice_id}]
             if not meta.exists() and path.exists():path.with_suffix('.mp3.sha256').unlink(missing_ok=True)
             cached(path,request,lambda:provider.dialogue(request,path,meta))

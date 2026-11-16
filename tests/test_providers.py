@@ -20,6 +20,7 @@ def test_elevenlabs_requests_and_usage(tmp_path):
     provider.effect('quiet wind', 2, tmp_path/'sfx.mp3')
     assert [r.url.path for r in requests] == ['/v1/text-to-speech/voice123', '/v1/music', '/v1/sound-generation']
     assert json.loads(requests[0].content)['previous_text'] == 'before'
+    assert set(json.loads(requests[0].content)) == {'text','model_id','previous_text','next_text'}
     assert json.loads(requests[1].content)['force_instrumental'] is True
     assert json.loads(requests[2].content)['model_id'] == 'eleven_text_to_sound_v2'
     assert 'secret' not in (tmp_path/'usage.jsonl').read_text()
