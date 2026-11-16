@@ -302,7 +302,9 @@ final class AudioPlayerService {
             }
         })
         loadCover(urls.coverURL, session: session)
-        scheduleRefresh(expiresAt: urls.expiresAt, session: session)
+        if !urls.audioURL.isFileURL {
+            scheduleRefresh(expiresAt: urls.expiresAt, session: session)
+        }
         updateNowPlaying()
     }
 
@@ -404,6 +406,12 @@ final class AudioPlayerService {
 
     private func loadCover(_ url: URL, session: UUID) {
         coverTask?.cancel()
+        if url.isFileURL {
+            guard session == sessionID, let image = UIImage(contentsOfFile: url.path) else { return }
+            coverImage = image
+            updateNowPlaying()
+            return
+        }
         coverTask = Task { [weak self] in
             do {
                 let (data, response) = try await URLSession.shared.data(from: url)

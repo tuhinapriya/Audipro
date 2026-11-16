@@ -83,7 +83,7 @@ struct FabletArtwork: View {
             ZStack {
                 RoundedRectangle(cornerRadius: large ? 24 : 14)
                     .fill(LinearGradient(colors: [Color(red: 0.37, green: 0.31, blue: 0.33), Color(red: 0.13, green: 0.17, blue: 0.22), FabletColors.background], startPoint: .topLeading, endPoint: .bottomTrailing))
-                if let production, let image = model.covers[production.id] ?? (model.player.production?.id == production.id ? model.player.coverImage : nil) {
+                if let production, let image = sampleImage(production) ?? model.covers[production.id] ?? (model.player.production?.id == production.id ? model.player.coverImage : nil) {
                     Image(uiImage: image)
                         .resizable()
                         .scaledToFill()
@@ -105,13 +105,22 @@ struct FabletArtwork: View {
         .aspectRatio(1, contentMode: .fit)
         .accessibilityHidden(true)
         .task(id: "\(production?.id ?? "")-\(production?.assetsAvailable ?? false)") {
-            if let production { await model.loadCover(production) }
+            if let production, !(model.repositoryMode == "Demo" && production.id == DemoProductionRepository.sampleID) {
+                await model.loadCover(production)
+            }
         }
+    }
+
+    private func sampleImage(_ production: Production) -> UIImage? {
+        guard model.repositoryMode == "Demo", production.id == DemoProductionRepository.sampleID,
+              let url = DemoProductionRepository.bundledResource("local-sample", extension: "png") else { return nil }
+        return UIImage(contentsOfFile: url.path)
     }
 }
 
 struct FabletStatusPill: View {
     let production: Production
+    @Environment(AppModel.self) private var model
 
     private var tint: Color {
         switch production.status {
@@ -124,7 +133,7 @@ struct FabletStatusPill: View {
     var body: some View {
         HStack(spacing: 6) {
             Circle().fill(tint).frame(width: 6, height: 6)
-            Text(production.status.label)
+            Text(model.repositoryMode == "Demo" && production.id == DemoProductionRepository.sampleID ? "Pre-rendered" : production.status.label)
                 .font(.caption.weight(.semibold))
                 .lineLimit(1)
         }

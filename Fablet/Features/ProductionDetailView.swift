@@ -6,6 +6,7 @@ struct ProductionDetailView: View {
     @Environment(AppModel.self) private var model
     @State private var openingPlayer = false
     @State private var isCheckingProduction = true
+    private var isSample: Bool { model.repositoryMode == "Demo" && id == DemoProductionRepository.sampleID }
 
     private let stages: [ProductionStatus] = [
         .queued, .researching, .writing, .narrating, .scoring, .mixing, .qualityCheck, .completed
@@ -17,16 +18,18 @@ struct ProductionDetailView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
                     HStack {
-                        FabletEyebrow(text: "Your production")
+                        FabletEyebrow(text: isSample ? "Pre-rendered sample" : "Your production")
                         Spacer()
                         FabletDemoBadge(mode: model.repositoryMode)
                     }
-                    VStack(alignment: .leading, spacing: 4) {
-                        FabletEyebrow(text: "Production ID")
-                        Text(id)
-                            .font(.caption.monospaced())
-                            .foregroundStyle(FabletColors.muted)
-                            .textSelection(.enabled)
+                    if !isSample {
+                        VStack(alignment: .leading, spacing: 4) {
+                            FabletEyebrow(text: "Production ID")
+                            Text(id)
+                                .font(.caption.monospaced())
+                                .foregroundStyle(FabletColors.muted)
+                                .textSelection(.enabled)
+                        }
                     }
                     if let production = model.production(id: id) {
                         productionContent(production)
@@ -94,7 +97,7 @@ struct ProductionDetailView: View {
                 progressContent(production)
             }
 
-            productionTimeline(production)
+            if !isSample { productionTimeline(production) }
 
             if let description = production.description?.trimmingCharacters(in: .whitespacesAndNewlines), !description.isEmpty {
                 VStack(alignment: .leading, spacing: 9) {
@@ -106,15 +109,17 @@ struct ProductionDetailView: View {
                 }
             }
 
-            VStack(alignment: .leading, spacing: 9) {
-                FabletEyebrow(text: "The original idea")
-                Text(production.prompt)
-                    .font(.subheadline)
-                    .foregroundStyle(FabletColors.ink.opacity(0.85))
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            if !isSample {
+                VStack(alignment: .leading, spacing: 9) {
+                    FabletEyebrow(text: "The original idea")
+                    Text(production.prompt)
+                        .font(.subheadline)
+                        .foregroundStyle(FabletColors.ink.opacity(0.85))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(18)
+                .fabletCard()
             }
-            .padding(18)
-            .fabletCard()
         }
     }
 

@@ -1,0 +1,22 @@
+project:
+  id: 8bb4b8ac-ee9c-433d-a4ab-a2d06962c4b5
+session:
+  idle_timeout_seconds: 1800
+build:
+  framework: ios
+  profiles:
+    preview:
+      ios:
+        app_id: 4f64d9be-6646-493e-8ed5-f376997edb58
+        build_commands:
+          - xcodebuild -project 'Fablet.xcodeproj' -scheme 'Fablet' -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' ARCHS=arm64 -derivedDataPath build
+        output_path: build/Build/Products/Debug-iphonesimulator/Fablet.app
+pr_review:
+  enabled: true
+  build:
+    kind: revyl
+    profile: preview
+  proof_of_changes:
+    enabled: true
+    harness:
+      kind: revyl
